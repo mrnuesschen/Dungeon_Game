@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "GameTypes.h"
+#include "combat/SkillSystem.h"
 #include "entities/Enemy.h"
 #include "entities/Player.h"
 #include "raylib.h"
@@ -32,10 +33,20 @@ public:
     bool ConsumeWinEvent();
 
 private:
+    enum class ActionMenuState {
+        Root,
+        Fight,
+        Skills
+    };
+
     struct EnemyUnit {
         std::unique_ptr<Enemy> enemy;
         Texture2D sprite;
         bool spriteLoaded;
+        int dotDamage;
+        int dotTurns;
+        int attackDebuffAmount;
+        int attackDebuffTurns;
     };
 
     Player player;
@@ -46,12 +57,21 @@ private:
 
     bool returnToMenuRequested;
     bool winEventPending;
+    ActionMenuState actionMenuState;
+    int playerDamageReductionAmount;
+    int playerDamageReductionTurns;
 
-    ui::Button attackButton;
+    ui::Button fightButton;
     ui::Button defendButton;
     ui::Button healButton;
     ui::Button menuButton;
     ui::Button restartButton;
+    ui::Button simpleAttackButton;
+    ui::Button skillsButton;
+    ui::Button backButton;
+    ui::Button classSkillButtonOne;
+    ui::Button classSkillButtonTwo;
+    ui::Button skillsBackButton;
 
     Texture2D playerAvatarTexture;
     bool playerAvatarLoaded;
@@ -68,6 +88,12 @@ private:
     void AddEnemyToGroup(EnemyArchetype type, int hp);
     int FindFirstAliveEnemyIndex() const;
     bool AreAllEnemiesDefeated() const;
+    void ResetBattleEffects();
+    void ApplyEnemyDotEffects();
+    void ExecuteSimpleAttack();
+    void ExecuteClassSkill(size_t skillIndex);
+    std::string BuildClassSkillMenuText() const;
+    const std::vector<combat::SkillDefinition>& GetClassSkills() const;
 
     void DrawHpBar(float x, float y, float w, float h, int hp, int maxHp) const;
 };

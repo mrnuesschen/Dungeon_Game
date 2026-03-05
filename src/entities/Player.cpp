@@ -98,6 +98,10 @@ const std::string& Player::GetClassName() const {
     return className;
 }
 
+const std::vector<combat::SkillDefinition>& Player::GetSkills() const {
+    return availableSkills;
+}
+
 const char* Player::ClassToString(PlayerClass value) {
     switch (value) {
     case PlayerClass::Tank:
@@ -117,6 +121,8 @@ const char* Player::ClassToString(PlayerClass value) {
 }
 
 void Player::ApplyPreset() {
+    availableSkills = combat::GetSkillsForClass(playerClass);
+
     switch (playerClass) {
     case PlayerClass::Tank:
         className = "Tank";

@@ -1,8 +1,10 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "GameTypes.h"
+#include "combat/SkillSystem.h"
 
 class Player {
 public:
@@ -33,6 +35,7 @@ public:
     int GetHp() const;
     int GetMaxHp() const;
     const std::string& GetClassName() const;
+    const std::vector<combat::SkillDefinition>& GetSkills() const;
 
     static const char* ClassToString(PlayerClass playerClass);
 
@@ -50,4 +53,5 @@ private:
     int healMin;
     int healMax;
     bool defending;
+    std::vector<combat::SkillDefinition> availableSkills;
 };

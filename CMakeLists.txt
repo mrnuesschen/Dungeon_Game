@@ -22,6 +22,9 @@ add_executable(DungeonGame WIN32
     src/entities/Slime.cpp
     src/entities/Skeleton.cpp
     src/entities/EnemyFactory.cpp
+    src/combat/SkillSystem.cpp
+    src/combat/SkillDefinitions.cpp
+    src/combat/SkillAssignments.cpp
     src/ui/Button.cpp
     src/scenes/MainMenuScene.cpp
     src/scenes/CharacterCreationScene.cpp

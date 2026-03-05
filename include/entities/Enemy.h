@@ -1,8 +1,10 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "GameTypes.h"
+#include "combat/SkillSystem.h"
 
 class Enemy {
 public:
@@ -19,6 +21,7 @@ public:
     int RollAttack() const;
     void ApplyDamage(int damage);
     bool IsAlive() const;
+    const std::vector<combat::SkillDefinition>& GetSkills() const;
 
 protected:
     Enemy(EnemyArchetype archetype, std::string name, std::string spritePath, int maxHp, int attackMin, int attackMax);
@@ -30,4 +33,5 @@ protected:
     int maxHp;
     int attackMin;
     int attackMax;
+    std::vector<combat::SkillDefinition> availableSkills;
 };

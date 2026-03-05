@@ -1,0 +1,34 @@
+#pragma once
+
+#include <string>
+#include <vector>
+
+#include "GameTypes.h"
+
+namespace combat {
+
+enum class SkillEffectType {
+    DirectDamage,
+    AreaDamage,
+    DamageOverTime,
+    PlayerDamageReductionBuff,
+    EnemyAttackDebuff,
+    SelfHeal
+};
+
+struct SkillEffectDefinition {
+    SkillEffectType type;
+    int magnitude = 0;
+    int durationTurns = 0;
+};
+
+struct SkillDefinition {
+    std::string name;
+    std::string description;
+    std::vector<SkillEffectDefinition> effects;
+};
+
+const std::vector<SkillDefinition>& GetSkillsForClass(PlayerClass playerClass);
+const std::vector<SkillDefinition>& GetSkillsForEnemy(EnemyArchetype enemyType);
+
+}

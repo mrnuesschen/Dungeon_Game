@@ -11,26 +11,35 @@ BattleScene::BattleScene()
     : player(),
       enemies(),
       phase(BattlePhase::PlayerTurn),
-    combatLog("Your turn: Attack, Defend, or Heal."),
+    combatLog("Your turn: Fight, Defend, or Heal."),
       enemyActionDelay(0.0f),
       returnToMenuRequested(false),
       winEventPending(false),
-    attackButton{Rectangle{620.0f, 345.0f, 140.0f, 52.0f}, "Attack", true},
+    actionMenuState(ActionMenuState::Root),
+    playerDamageReductionAmount(0),
+    playerDamageReductionTurns(0),
+    fightButton{Rectangle{620.0f, 345.0f, 140.0f, 52.0f}, "Fight", true},
     defendButton{Rectangle{770.0f, 345.0f, 140.0f, 52.0f}, "Defend", true},
     healButton{Rectangle{620.0f, 407.0f, 140.0f, 52.0f}, "Heal", true},
     menuButton{Rectangle{770.0f, 407.0f, 140.0f, 52.0f}, "Menu", true},
     restartButton{Rectangle{620.0f, 469.0f, 290.0f, 52.0f}, "New Battle", true},
+    simpleAttackButton{Rectangle{620.0f, 345.0f, 140.0f, 52.0f}, "Simple Attack", true},
+    skillsButton{Rectangle{770.0f, 345.0f, 140.0f, 52.0f}, "Skills", true},
+    backButton{Rectangle{620.0f, 407.0f, 290.0f, 52.0f}, "Back", true},
+    classSkillButtonOne{Rectangle{620.0f, 345.0f, 140.0f, 52.0f}, "Skill 1", true},
+    classSkillButtonTwo{Rectangle{770.0f, 345.0f, 140.0f, 52.0f}, "Skill 2", true},
+    skillsBackButton{Rectangle{620.0f, 407.0f, 290.0f, 52.0f}, "Back", true},
       playerAvatarTexture{},
-            playerAvatarLoaded(false),
-            battleBackgroundTexture{},
-            battleBackgroundLoaded(false) {
+    playerAvatarLoaded(false),
+    battleBackgroundTexture{},
+    battleBackgroundLoaded(false) {
     CreateEnemyGroupRandom();
-        ReloadRandomBattleBackground();
+    ReloadRandomBattleBackground();
 }
 
 BattleScene::~BattleScene() {
     ClearEnemies();
-        UnloadBattleBackground();
+    UnloadBattleBackground();
 
     if (playerAvatarLoaded) {
         UnloadTexture(playerAvatarTexture);
@@ -58,6 +67,8 @@ void BattleScene::StartNew() {
     enemyActionDelay = 0.0f;
     returnToMenuRequested = false;
     winEventPending = false;
+    actionMenuState = ActionMenuState::Root;
+    ResetBattleEffects();
 }
 
 void BattleScene::StartFromSave(const BattleSaveData& saveData) {
@@ -76,6 +87,8 @@ void BattleScene::StartFromSave(const BattleSaveData& saveData) {
     enemyActionDelay = 0.4f;
     returnToMenuRequested = false;
     winEventPending = false;
+    actionMenuState = ActionMenuState::Root;
+    ResetBattleEffects();
 }
 
 void BattleScene::Update() {
@@ -98,13 +111,32 @@ void BattleScene::Update() {
     const float row2Y = row1Y + buttonHeight + pad;
     const float row3Y = row2Y + buttonHeight + pad;
 
-    attackButton.bounds = Rectangle{actionStartX, row1Y, buttonWidth, buttonHeight};
+    fightButton.bounds = Rectangle{actionStartX, row1Y, buttonWidth, buttonHeight};
     defendButton.bounds = Rectangle{actionStartX + buttonWidth + pad, row1Y, buttonWidth, buttonHeight};
     healButton.bounds = Rectangle{actionStartX, row2Y, buttonWidth, buttonHeight};
     menuButton.bounds = Rectangle{actionStartX + buttonWidth + pad, row2Y, buttonWidth, buttonHeight};
     restartButton.bounds = Rectangle{actionStartX, row3Y, actionWidth, buttonHeight};
+    simpleAttackButton.bounds = Rectangle{actionStartX, row1Y, buttonWidth, buttonHeight};
+    skillsButton.bounds = Rectangle{actionStartX + buttonWidth + pad, row1Y, buttonWidth, buttonHeight};
+    backButton.bounds = Rectangle{actionStartX, row2Y, actionWidth, buttonHeight};
+    classSkillButtonOne.bounds = Rectangle{actionStartX, row1Y, buttonWidth, buttonHeight};
+    classSkillButtonTwo.bounds = Rectangle{actionStartX + buttonWidth + pad, row1Y, buttonWidth, buttonHeight};
+    skillsBackButton.bounds = Rectangle{actionStartX, row2Y, actionWidth, buttonHeight};
 
-    if (ui::IsPressed(menuButton)) {
+    const auto& classSkills = GetClassSkills();
+    if (!classSkills.empty()) {
+        classSkillButtonOne.text = classSkills[0].name;
+    } else {
+        classSkillButtonOne.text = "Skill";
+    }
+
+    if (classSkills.size() > 1) {
+        classSkillButtonTwo.text = classSkills[1].name;
+    } else {
+        classSkillButtonTwo.text = "-";
+    }
+
+    if (actionMenuState == ActionMenuState::Root && ui::IsPressed(menuButton)) {
         returnToMenuRequested = true;
     }
 
@@ -115,31 +147,53 @@ void BattleScene::Update() {
     if (phase == BattlePhase::EnemyTurn) {
         enemyActionDelay -= GetFrameTime();
         if (enemyActionDelay <= 0.0f) {
+            ApplyEnemyDotEffects();
+
             int totalDamage = 0;
             int attackers = 0;
             bool defenseAvailable = player.IsDefending();
 
-            for (EnemyUnit& unit : enemies) {
-                if (!unit.enemy->IsAlive()) {
-                    continue;
-                }
+            if (!AreAllEnemiesDefeated()) {
+                for (EnemyUnit& unit : enemies) {
+                    if (!unit.enemy->IsAlive()) {
+                        continue;
+                    }
 
-                int damage = unit.enemy->RollAttack();
-                if (defenseAvailable) {
-                    damage = std::max(1, damage / 2);
-                    defenseAvailable = false;
-                }
+                    int damage = unit.enemy->RollAttack();
+                    if (unit.attackDebuffTurns > 0) {
+                        damage = std::max(1, damage - unit.attackDebuffAmount);
+                        unit.attackDebuffTurns--;
+                        if (unit.attackDebuffTurns <= 0) {
+                            unit.attackDebuffAmount = 0;
+                        }
+                    }
 
-                player.ApplyDamage(damage);
-                totalDamage += damage;
-                attackers++;
+                    if (defenseAvailable) {
+                        damage = std::max(1, damage / 2);
+                        defenseAvailable = false;
+                    }
 
-                if (!player.IsAlive()) {
-                    break;
+                    if (playerDamageReductionTurns > 0) {
+                        damage = std::max(1, damage - playerDamageReductionAmount);
+                    }
+
+                    player.ApplyDamage(damage);
+                    totalDamage += damage;
+                    attackers++;
+
+                    if (!player.IsAlive()) {
+                        break;
+                    }
                 }
             }
 
             player.SetDefending(false);
+            if (playerDamageReductionTurns > 0) {
+                playerDamageReductionTurns--;
+                if (playerDamageReductionTurns <= 0) {
+                    playerDamageReductionAmount = 0;
+                }
+            }
 
             if (attackers > 0) {
                 combatLog = "Enemies hit you for " + std::to_string(totalDamage) + " damage.";
@@ -149,34 +203,29 @@ void BattleScene::Update() {
 
             if (!player.IsAlive()) {
                 phase = BattlePhase::Lost;
+                actionMenuState = ActionMenuState::Root;
                 combatLog += " You were defeated.";
+            } else if (AreAllEnemiesDefeated()) {
+                phase = BattlePhase::Won;
+                winEventPending = true;
+                actionMenuState = ActionMenuState::Root;
+                combatLog = "Damage over time defeated all enemies. Victory!";
             } else {
                 phase = BattlePhase::PlayerTurn;
+                actionMenuState = ActionMenuState::Root;
+                combatLog = "Your turn: Fight, Defend, or Heal.";
             }
         }
     }
 
-    if (phase == BattlePhase::PlayerTurn) {
-        if (ui::IsPressed(attackButton)) {
-            const int targetIndex = FindFirstAliveEnemyIndex();
-            if (targetIndex < 0) {
-                phase = BattlePhase::Won;
-                winEventPending = true;
-                return;
-            }
+    if (phase != BattlePhase::PlayerTurn) {
+        return;
+    }
 
-            const int damage = player.RollAttack();
-            enemies[static_cast<size_t>(targetIndex)].enemy->ApplyDamage(damage);
-            combatLog = "You attack " + enemies[static_cast<size_t>(targetIndex)].enemy->GetName() + " and deal " + std::to_string(damage) + " damage.";
-
-            if (AreAllEnemiesDefeated()) {
-                phase = BattlePhase::Won;
-                combatLog += " Victory!";
-                winEventPending = true;
-            } else {
-                phase = BattlePhase::EnemyTurn;
-                enemyActionDelay = 0.6f;
-            }
+    if (actionMenuState == ActionMenuState::Root) {
+        if (ui::IsPressed(fightButton)) {
+            actionMenuState = ActionMenuState::Fight;
+            combatLog = "Choose: Simple Attack or Skills.";
         } else if (ui::IsPressed(defendButton)) {
             player.SetDefending(true);
             combatLog = "You defend. The next hit is halved.";
@@ -189,6 +238,28 @@ void BattleScene::Update() {
             combatLog = "You heal " + std::to_string(player.GetHp() - oldHp) + " HP.";
             phase = BattlePhase::EnemyTurn;
             enemyActionDelay = 0.6f;
+        }
+    } else if (actionMenuState == ActionMenuState::Fight) {
+        if (ui::IsPressed(backButton)) {
+            actionMenuState = ActionMenuState::Root;
+            combatLog = "Your turn: Fight, Defend, or Heal.";
+        } else if (ui::IsPressed(simpleAttackButton)) {
+            ExecuteSimpleAttack();
+        } else if (ui::IsPressed(skillsButton)) {
+            actionMenuState = ActionMenuState::Skills;
+            combatLog = BuildClassSkillMenuText();
+        }
+    } else if (actionMenuState == ActionMenuState::Skills) {
+        if (ui::IsPressed(skillsBackButton)) {
+            actionMenuState = ActionMenuState::Fight;
+            combatLog = "Choose: Simple Attack or Skills.";
+            return;
+        }
+
+        if (ui::IsPressed(classSkillButtonOne) && !classSkills.empty()) {
+            ExecuteClassSkill(0);
+        } else if (ui::IsPressed(classSkillButtonTwo) && classSkills.size() > 1) {
+            ExecuteClassSkill(1);
         }
     }
 }
@@ -304,14 +375,39 @@ void BattleScene::Draw() {
     const float logY = playerAreaTop + playerAreaHeight - 36.0f * sy;
     DrawText(combatLog.c_str(), static_cast<int>(logX), static_cast<int>(logY), static_cast<int>(18.0f * sf), RAYWHITE);
 
-    attackButton.enabled = phase == BattlePhase::PlayerTurn;
-    defendButton.enabled = phase == BattlePhase::PlayerTurn;
-    healButton.enabled = phase == BattlePhase::PlayerTurn;
+    const bool isPlayerTurn = phase == BattlePhase::PlayerTurn;
+    const bool isRootMenu = actionMenuState == ActionMenuState::Root;
+    const bool isFightMenu = actionMenuState == ActionMenuState::Fight;
+    const bool isSkillsMenu = actionMenuState == ActionMenuState::Skills;
+    const auto& classSkills = GetClassSkills();
 
-    ui::DrawButton(attackButton);
-    ui::DrawButton(defendButton);
-    ui::DrawButton(healButton);
-    ui::DrawButton(menuButton);
+    fightButton.enabled = isPlayerTurn && isRootMenu;
+    defendButton.enabled = isPlayerTurn && isRootMenu;
+    healButton.enabled = isPlayerTurn && isRootMenu;
+    menuButton.enabled = isRootMenu;
+
+    simpleAttackButton.enabled = isPlayerTurn && isFightMenu;
+    skillsButton.enabled = isPlayerTurn && isFightMenu;
+    backButton.enabled = isPlayerTurn && isFightMenu;
+
+    classSkillButtonOne.enabled = isPlayerTurn && isSkillsMenu && !classSkills.empty();
+    classSkillButtonTwo.enabled = isPlayerTurn && isSkillsMenu && classSkills.size() > 1;
+    skillsBackButton.enabled = isPlayerTurn && isSkillsMenu;
+
+    if (isSkillsMenu && isPlayerTurn) {
+        ui::DrawButton(classSkillButtonOne);
+        ui::DrawButton(classSkillButtonTwo);
+        ui::DrawButton(skillsBackButton);
+    } else if (isFightMenu && isPlayerTurn) {
+        ui::DrawButton(simpleAttackButton);
+        ui::DrawButton(skillsButton);
+        ui::DrawButton(backButton);
+    } else {
+        ui::DrawButton(fightButton);
+        ui::DrawButton(defendButton);
+        ui::DrawButton(healButton);
+        ui::DrawButton(menuButton);
+    }
 
     if (phase == BattlePhase::Won || phase == BattlePhase::Lost) {
         ui::DrawButton(restartButton);
@@ -363,6 +459,210 @@ bool BattleScene::ConsumeWinEvent() {
     const bool value = winEventPending;
     winEventPending = false;
     return value;
+}
+
+void BattleScene::ResetBattleEffects() {
+    playerDamageReductionAmount = 0;
+    playerDamageReductionTurns = 0;
+
+    for (EnemyUnit& unit : enemies) {
+        unit.dotDamage = 0;
+        unit.dotTurns = 0;
+        unit.attackDebuffAmount = 0;
+        unit.attackDebuffTurns = 0;
+    }
+}
+
+void BattleScene::ApplyEnemyDotEffects() {
+    int totalDot = 0;
+    int affectedEnemies = 0;
+    for (EnemyUnit& unit : enemies) {
+        if (!unit.enemy->IsAlive() || unit.dotTurns <= 0) {
+            continue;
+        }
+
+        unit.enemy->ApplyDamage(unit.dotDamage);
+        totalDot += unit.dotDamage;
+        affectedEnemies++;
+
+        unit.dotTurns--;
+        if (unit.dotTurns <= 0) {
+            unit.dotDamage = 0;
+        }
+    }
+
+    if (affectedEnemies > 0) {
+        combatLog = "Damage over time hits " + std::to_string(affectedEnemies) + " enemies for " + std::to_string(totalDot) + " total damage.";
+    }
+}
+
+void BattleScene::ExecuteSimpleAttack() {
+    const int targetIndex = FindFirstAliveEnemyIndex();
+    if (targetIndex < 0) {
+        phase = BattlePhase::Won;
+        winEventPending = true;
+        actionMenuState = ActionMenuState::Root;
+        return;
+    }
+
+    Enemy& target = *enemies[static_cast<size_t>(targetIndex)].enemy;
+    const int damage = player.RollAttack();
+    target.ApplyDamage(damage);
+    combatLog = "You strike " + target.GetName() + " for " + std::to_string(damage) + " damage.";
+
+    if (AreAllEnemiesDefeated()) {
+        phase = BattlePhase::Won;
+        combatLog += " Victory!";
+        winEventPending = true;
+    } else {
+        phase = BattlePhase::EnemyTurn;
+        enemyActionDelay = 0.6f;
+    }
+
+    actionMenuState = ActionMenuState::Root;
+}
+
+void BattleScene::ExecuteClassSkill(size_t skillIndex) {
+    const auto& skills = GetClassSkills();
+    if (skillIndex >= skills.size()) {
+        combatLog = "No valid skill selected.";
+        actionMenuState = ActionMenuState::Fight;
+        return;
+    }
+
+    const combat::SkillDefinition& skill = skills[skillIndex];
+    int totalImmediateDamage = 0;
+    int directHits = 0;
+    int aoeHits = 0;
+    int dotApplied = 0;
+    int debuffApplied = 0;
+    int healed = 0;
+
+    const int singleTargetIndex = FindFirstAliveEnemyIndex();
+
+    for (const combat::SkillEffectDefinition& effect : skill.effects) {
+        switch (effect.type) {
+        case combat::SkillEffectType::DirectDamage: {
+            if (singleTargetIndex >= 0) {
+                EnemyUnit& target = enemies[static_cast<size_t>(singleTargetIndex)];
+                target.enemy->ApplyDamage(effect.magnitude);
+                totalImmediateDamage += effect.magnitude;
+                directHits++;
+            }
+            break;
+        }
+        case combat::SkillEffectType::AreaDamage: {
+            for (EnemyUnit& unit : enemies) {
+                if (!unit.enemy->IsAlive()) {
+                    continue;
+                }
+
+                unit.enemy->ApplyDamage(effect.magnitude);
+                totalImmediateDamage += effect.magnitude;
+                aoeHits++;
+            }
+            break;
+        }
+        case combat::SkillEffectType::DamageOverTime: {
+            if (aoeHits > 0) {
+                for (EnemyUnit& unit : enemies) {
+                    if (!unit.enemy->IsAlive()) {
+                        continue;
+                    }
+
+                    unit.dotDamage = std::max(unit.dotDamage, effect.magnitude);
+                    unit.dotTurns = std::max(unit.dotTurns, effect.durationTurns);
+                    dotApplied++;
+                }
+            } else if (singleTargetIndex >= 0) {
+                EnemyUnit& target = enemies[static_cast<size_t>(singleTargetIndex)];
+                if (target.enemy->IsAlive()) {
+                    target.dotDamage = std::max(target.dotDamage, effect.magnitude);
+                    target.dotTurns = std::max(target.dotTurns, effect.durationTurns);
+                    dotApplied = 1;
+                }
+            }
+            break;
+        }
+        case combat::SkillEffectType::PlayerDamageReductionBuff: {
+            playerDamageReductionAmount = std::max(playerDamageReductionAmount, effect.magnitude);
+            playerDamageReductionTurns = std::max(playerDamageReductionTurns, effect.durationTurns);
+            break;
+        }
+        case combat::SkillEffectType::EnemyAttackDebuff: {
+            if (aoeHits > 0) {
+                for (EnemyUnit& unit : enemies) {
+                    if (!unit.enemy->IsAlive()) {
+                        continue;
+                    }
+
+                    unit.attackDebuffAmount = std::max(unit.attackDebuffAmount, effect.magnitude);
+                    unit.attackDebuffTurns = std::max(unit.attackDebuffTurns, effect.durationTurns);
+                    debuffApplied++;
+                }
+            } else if (singleTargetIndex >= 0) {
+                EnemyUnit& target = enemies[static_cast<size_t>(singleTargetIndex)];
+                if (target.enemy->IsAlive()) {
+                    target.attackDebuffAmount = std::max(target.attackDebuffAmount, effect.magnitude);
+                    target.attackDebuffTurns = std::max(target.attackDebuffTurns, effect.durationTurns);
+                    debuffApplied = 1;
+                }
+            }
+            break;
+        }
+        case combat::SkillEffectType::SelfHeal: {
+            const int oldHp = player.GetHp();
+            player.Heal(effect.magnitude);
+            healed += player.GetHp() - oldHp;
+            break;
+        }
+        }
+    }
+
+    combatLog = skill.name + ": " + skill.description;
+    if (totalImmediateDamage > 0) {
+        combatLog += " Immediate damage " + std::to_string(totalImmediateDamage) + ".";
+    }
+    if (dotApplied > 0) {
+        combatLog += " DoT applied to " + std::to_string(dotApplied) + " target(s).";
+    }
+    if (debuffApplied > 0) {
+        combatLog += " Attack debuff on " + std::to_string(debuffApplied) + " target(s).";
+    }
+    if (playerDamageReductionTurns > 0) {
+        combatLog += " Damage reduction active for " + std::to_string(playerDamageReductionTurns) + " turn(s).";
+    }
+    if (healed > 0) {
+        combatLog += " Healed " + std::to_string(healed) + " HP.";
+    }
+
+    if (AreAllEnemiesDefeated()) {
+        phase = BattlePhase::Won;
+        combatLog += " Victory!";
+        winEventPending = true;
+    } else {
+        phase = BattlePhase::EnemyTurn;
+        enemyActionDelay = 0.6f;
+    }
+
+    actionMenuState = ActionMenuState::Root;
+}
+
+std::string BattleScene::BuildClassSkillMenuText() const {
+    const auto& skills = GetClassSkills();
+    if (skills.empty()) {
+        return "No class skills available.";
+    }
+
+    std::string text = "Class Skills: " + skills[0].name + " - " + skills[0].description;
+    if (skills.size() > 1) {
+        text += " | " + skills[1].name + " - " + skills[1].description;
+    }
+    return text;
+}
+
+const std::vector<combat::SkillDefinition>& BattleScene::GetClassSkills() const {
+    return combat::GetSkillsForClass(player.GetClass());
 }
 
 void BattleScene::DrawHpBar(float x, float y, float w, float h, int hp, int maxHp) const {
@@ -487,6 +787,10 @@ void BattleScene::CreateEnemyGroupFromSave(const BattleSaveData& saveData) {
 void BattleScene::AddEnemyToGroup(EnemyArchetype type, int hp) {
     EnemyUnit unit{};
     unit.enemy = CreateEnemy(type);
+    unit.dotDamage = 0;
+    unit.dotTurns = 0;
+    unit.attackDebuffAmount = 0;
+    unit.attackDebuffTurns = 0;
     if (hp >= 0) {
         unit.enemy->SetHp(hp);
     }

@@ -8,11 +8,12 @@
 Enemy::Enemy(EnemyArchetype archetypeValue, std::string nameValue, std::string spritePathValue, int maxHpValue, int attackMinValue, int attackMaxValue)
     : archetype(archetypeValue),
       name(std::move(nameValue)),
-    spritePath(std::move(spritePathValue)),
+            spritePath(std::move(spritePathValue)),
       hp(maxHpValue),
       maxHp(maxHpValue),
       attackMin(attackMinValue),
-      attackMax(attackMaxValue) {}
+            attackMax(attackMaxValue),
+            availableSkills(combat::GetSkillsForEnemy(archetypeValue)) {}
 
 EnemyArchetype Enemy::GetArchetype() const {
     return archetype;
@@ -48,4 +49,8 @@ void Enemy::ApplyDamage(int damage) {
 
 bool Enemy::IsAlive() const {
     return hp > 0;
+}
+
+const std::vector<combat::SkillDefinition>& Enemy::GetSkills() const {
+    return availableSkills;
 }
