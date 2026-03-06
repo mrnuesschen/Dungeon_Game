@@ -78,6 +78,7 @@ private:
     ActionMenuState actionMenuState;
     PendingTargetAction pendingTargetAction;
     size_t pendingSkillIndex;
+    int skillsScrollOffset;
     int playerDamageReductionAmount;
     int playerDamageReductionTurns;
     int minEncounterEnemies;
@@ -128,6 +129,7 @@ private:
     void ResolvePendingTargetAction(int targetIndex);
     void ExecuteSimpleAttack(int targetIndex);
     void ExecuteClassSkill(size_t skillIndex, int targetIndex);
+    int ResolveEffectMagnitude(const combat::SkillEffectDefinition& effect) const;
     std::string BuildClassSkillMenuText() const;
     const std::vector<combat::SkillDefinition>& GetClassSkills() const;
 

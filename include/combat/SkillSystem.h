@@ -7,6 +7,14 @@
 
 namespace combat {
 
+enum class SkillScalingStat {
+    None,
+    Attack,
+    MagicAttack,
+    Defense,
+    MaxHp
+};
+
 enum class SkillEffectType {
     DirectDamage,
     AreaDamage,
@@ -20,6 +28,8 @@ struct SkillEffectDefinition {
     SkillEffectType type;
     int magnitude = 0;
     int durationTurns = 0;
+    SkillScalingStat scalingStat = SkillScalingStat::None;
+    int scalingPercent = 0;
 };
 
 struct SkillDefinition {

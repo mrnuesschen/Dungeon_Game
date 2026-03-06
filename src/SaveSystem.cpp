@@ -171,6 +171,12 @@ bool SaveBattleToPath(const BattleSaveData& data, const std::string& path) {
         out << data.inventoryItemId[static_cast<size_t>(i)] << ' ' << data.inventoryQuantity[static_cast<size_t>(i)] << '\n';
     }
 
+    const int clampedEquipmentCount = std::clamp(data.equippedEntryCount, 0, kMaxEquipmentSaveEntries);
+    out << clampedEquipmentCount << '\n';
+    for (int i = 0; i < clampedEquipmentCount; ++i) {
+        out << data.equippedSlotIndex[static_cast<size_t>(i)] << ' ' << data.equippedItemId[static_cast<size_t>(i)] << '\n';
+    }
+
     return out.good();
 }
 
@@ -254,6 +260,41 @@ bool LoadBattleFromPath(BattleSaveData& outData, const std::string& path) {
     for (int i = outData.inventoryEntryCount; i < kMaxInventorySaveEntries; ++i) {
         outData.inventoryItemId[static_cast<size_t>(i)] = 0;
         outData.inventoryQuantity[static_cast<size_t>(i)] = 0;
+    }
+
+    int equippedCount = 0;
+    if (!(in >> equippedCount)) {
+        outData.equippedEntryCount = 0;
+        outData.equippedSlotIndex.fill(0);
+        outData.equippedItemId.fill(0);
+        return true;
+    }
+
+    const int clampedEquipmentCount = std::clamp(equippedCount, 0, kMaxEquipmentSaveEntries);
+    outData.equippedEntryCount = 0;
+    for (int i = 0; i < clampedEquipmentCount; ++i) {
+        int slotIndex = 0;
+        int itemId = 0;
+        if (!(in >> slotIndex >> itemId)) {
+            break;
+        }
+
+        if (slotIndex < 0 || slotIndex >= kMaxEquipmentSaveEntries) {
+            continue;
+        }
+
+        if (!items::IsValidItemIdValue(itemId)) {
+            continue;
+        }
+
+        const size_t dst = static_cast<size_t>(outData.equippedEntryCount++);
+        outData.equippedSlotIndex[dst] = slotIndex;
+        outData.equippedItemId[dst] = itemId;
+    }
+
+    for (int i = outData.equippedEntryCount; i < kMaxEquipmentSaveEntries; ++i) {
+        outData.equippedSlotIndex[static_cast<size_t>(i)] = 0;
+        outData.equippedItemId[static_cast<size_t>(i)] = 0;
     }
 
     return true;

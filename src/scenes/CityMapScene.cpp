@@ -92,6 +92,7 @@ CityMapScene::CityMapScene()
             innEquipmentView(false),
             guildOfferScrollOffset(0),
       shopScrollOffset(0),
+            innInventoryScrollOffset(0),
       innPlayerName("Hero"),
       innPlayerClass(PlayerClass::Knight),
       innPlayerLevel(1),
@@ -268,6 +269,7 @@ CityMapAction CityMapScene::Update() {
             CloseAllBuildings(tavernOpen, guildOpen, shopOpen, innOpen);
             innOpen = true;
             innEquipmentView = false;
+            innInventoryScrollOffset = 0;
             innDraggedItem = std::nullopt;
             infoText = "Inn: Review your hero and inventory, then rest.";
             return CityMapAction::None;
@@ -337,6 +339,9 @@ CityMapAction CityMapScene::Update() {
 
         if (ui::IsPressed(effectiveEquipmentButton)) {
             innEquipmentView = !innEquipmentView;
+            if (innEquipmentView) {
+                innInventoryScrollOffset = 0;
+            }
             innDraggedItem = std::nullopt;
             infoText = innEquipmentView ? "Inn: Drag items onto highlighted equipment slots." : "Inn: Character overview.";
         }
@@ -366,14 +371,29 @@ CityMapAction CityMapScene::Update() {
         const float inventoryW = 400.0f * sx;
         const float inventoryRowH = 28.0f * sy;
         const int inventoryRows = 11;
-        const int visibleItems = std::min(inventoryRows, static_cast<int>(innInventoryEntries.size()));
+        const int maxInventoryOffset = std::max(0, static_cast<int>(innInventoryEntries.size()) - inventoryRows);
+        innInventoryScrollOffset = std::clamp(innInventoryScrollOffset, 0, maxInventoryOffset);
+        const int visibleItems = std::max(0, std::min(inventoryRows, static_cast<int>(innInventoryEntries.size()) - innInventoryScrollOffset));
+        const Rectangle inventoryListRect{inventoryX, inventoryY, inventoryW, static_cast<float>(inventoryRows) * (inventoryRowH + 4.0f * sy)};
+
+        if (CheckCollisionPointRec(GetMousePosition(), inventoryListRect)) {
+            const float wheel = GetMouseWheelMove();
+            if (wheel < 0.0f) {
+                innInventoryScrollOffset = std::min(maxInventoryOffset, innInventoryScrollOffset + 1);
+            } else if (wheel > 0.0f) {
+                innInventoryScrollOffset = std::max(0, innInventoryScrollOffset - 1);
+            }
+        }
 
         if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !innDraggedItem.has_value()) {
             const Vector2 mouse = GetMousePosition();
             for (int i = 0; i < visibleItems; ++i) {
                 const Rectangle rowRect{inventoryX, inventoryY + static_cast<float>(i) * (inventoryRowH + 4.0f * sy), inventoryW, inventoryRowH};
                 if (CheckCollisionPointRec(mouse, rowRect)) {
-                    innDraggedItem = innInventoryEntries[static_cast<size_t>(i)].id;
+                    const int entryIndex = innInventoryScrollOffset + i;
+                    if (entryIndex >= 0 && entryIndex < static_cast<int>(innInventoryEntries.size())) {
+                        innDraggedItem = innInventoryEntries[static_cast<size_t>(entryIndex)].id;
+                    }
                     break;
                 }
             }
@@ -712,9 +732,23 @@ void CityMapScene::Draw() const {
             if (innInventoryEntries.empty()) {
                 DrawText("Inventory is empty.", static_cast<int>(rightX + 12.0f * sx), static_cast<int>(136.0f * sy), static_cast<int>(16.0f * sf), Color{190, 205, 220, 255});
             } else {
-                const int rows = std::min(11, static_cast<int>(innInventoryEntries.size()));
+                const int inventoryRows = 11;
+                const int maxInventoryOffset = std::max(0, static_cast<int>(innInventoryEntries.size()) - inventoryRows);
+                const int visibleOffset = std::clamp(innInventoryScrollOffset, 0, maxInventoryOffset);
+                const int rows = std::max(0, std::min(inventoryRows, static_cast<int>(innInventoryEntries.size()) - visibleOffset));
+
+                if (maxInventoryOffset > 0) {
+                    DrawText(TextFormat("%d/%d", visibleOffset + 1, maxInventoryOffset + 1),
+                             static_cast<int>(rightX + panelW - 56.0f * sx),
+                             static_cast<int>(104.0f * sy),
+                             static_cast<int>(14.0f * sf),
+                             Color{180, 190, 205, 255});
+                    DrawText("Mouse wheel scroll", static_cast<int>(rightX + 12.0f * sx), static_cast<int>(104.0f * sy), static_cast<int>(13.0f * sf), Color{170, 180, 198, 255});
+                }
+
                 for (int i = 0; i < rows; ++i) {
-                    const items::InventoryEntry& entry = innInventoryEntries[static_cast<size_t>(i)];
+                    const int entryIndex = visibleOffset + i;
+                    const items::InventoryEntry& entry = innInventoryEntries[static_cast<size_t>(entryIndex)];
                     const items::ItemDefinition& def = items::GetItemDefinition(entry.id);
                     const Rectangle rowRect{rightX + 10.0f * sx, (128.0f + static_cast<float>(i) * 32.0f) * sy, panelW - 20.0f * sx, 28.0f * sy};
 

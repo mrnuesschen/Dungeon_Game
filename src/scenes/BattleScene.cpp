@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 
 #include "entities/EnemyFactory.h"
@@ -48,6 +49,7 @@ BattleScene::BattleScene()
     actionMenuState(ActionMenuState::Root),
         pendingTargetAction(PendingTargetAction::None),
         pendingSkillIndex(0),
+    skillsScrollOffset(0),
     playerDamageReductionAmount(0),
     playerDamageReductionTurns(0),
     minEncounterEnemies(1),
@@ -201,6 +203,24 @@ void BattleScene::StartFromSave(const BattleSaveData& saveData) {
     }
     player.SetInventoryEntries(inventoryEntries);
 
+    const int savedEquipCount = std::clamp(saveData.equippedEntryCount, 0, kMaxEquipmentSaveEntries);
+    for (int i = 0; i < savedEquipCount; ++i) {
+        const int slotIndex = saveData.equippedSlotIndex[static_cast<size_t>(i)];
+        const int rawItemId = saveData.equippedItemId[static_cast<size_t>(i)];
+        if (slotIndex < 0 || slotIndex >= static_cast<int>(items::EquipmentSlot::Count)) {
+            continue;
+        }
+
+        if (!items::IsValidItemIdValue(rawItemId)) {
+            continue;
+        }
+
+        const items::EquipmentSlot slot = static_cast<items::EquipmentSlot>(slotIndex);
+        const items::ItemId itemId = static_cast<items::ItemId>(rawItemId);
+        std::string ignoredMessage;
+        player.EquipItem(itemId, slot, ignoredMessage);
+    }
+
     ReloadPlayerAvatar();
 
     CreateEnemyGroupFromSave(saveData);
@@ -237,6 +257,19 @@ void BattleScene::Update() {
     const float row1Y = playerAreaTop + pad;
     const float row2Y = row1Y + buttonHeight + pad;
     const float row3Y = row2Y + buttonHeight + pad;
+    const float skillsPanelX = pad;
+    const float skillsPanelWidth = std::max(220.0f * sf, std::min(sw * (2.0f / 3.0f) - pad, sw - pad * 2.0f));
+    const float skillsHeaderHeight = std::max(24.0f * sf, 20.0f);
+    const float skillsListY = row1Y + skillsHeaderHeight + pad * 0.4f;
+    const float skillsListBottom = playerAreaTop + playerAreaHeight - pad;
+    const float skillsListHeight = std::max(20.0f, skillsListBottom - skillsListY);
+    const float skillsRowHeight = std::max(34.0f * sf, buttonHeight * 0.55f);
+    const auto& classSkills = GetClassSkills();
+    const int visibleSkillRows = std::max(1, static_cast<int>(std::floor(skillsListHeight / skillsRowHeight)));
+    const int maxSkillScrollOffset = std::max(0, static_cast<int>(classSkills.size()) - visibleSkillRows);
+    skillsScrollOffset = std::clamp(skillsScrollOffset, 0, maxSkillScrollOffset);
+    const float skillsBackX = skillsPanelX + skillsPanelWidth + pad;
+    const float skillsBackWidth = std::max(120.0f * sf, sw - skillsBackX - pad);
 
     fightButton.bounds = Rectangle{actionStartX, row1Y, buttonWidth, buttonHeight};
     defendButton.bounds = Rectangle{actionStartX + buttonWidth + pad, row1Y, buttonWidth, buttonHeight};
@@ -246,22 +279,9 @@ void BattleScene::Update() {
     simpleAttackButton.bounds = Rectangle{actionStartX, row1Y, buttonWidth, buttonHeight};
     skillsButton.bounds = Rectangle{actionStartX + buttonWidth + pad, row1Y, buttonWidth, buttonHeight};
     backButton.bounds = Rectangle{actionStartX, row2Y, actionWidth, buttonHeight};
-    classSkillButtonOne.bounds = Rectangle{actionStartX, row1Y, buttonWidth, buttonHeight};
-    classSkillButtonTwo.bounds = Rectangle{actionStartX + buttonWidth + pad, row1Y, buttonWidth, buttonHeight};
-    skillsBackButton.bounds = Rectangle{actionStartX, row2Y, actionWidth, buttonHeight};
-
-    const auto& classSkills = GetClassSkills();
-    if (!classSkills.empty()) {
-        classSkillButtonOne.text = classSkills[0].name;
-    } else {
-        classSkillButtonOne.text = "Skill";
-    }
-
-    if (classSkills.size() > 1) {
-        classSkillButtonTwo.text = classSkills[1].name;
-    } else {
-        classSkillButtonTwo.text = "-";
-    }
+    classSkillButtonOne.bounds = Rectangle{skillsPanelX, row1Y, skillsPanelWidth, buttonHeight};
+    classSkillButtonTwo.bounds = Rectangle{skillsPanelX, row1Y + skillsRowHeight + pad * 0.4f, skillsPanelWidth, buttonHeight};
+    skillsBackButton.bounds = Rectangle{skillsBackX, row1Y, skillsBackWidth, buttonHeight};
 
     if (actionMenuState == ActionMenuState::Root && ui::IsPressed(menuButton)) {
         returnToMenuRequested = true;
@@ -386,19 +406,34 @@ void BattleScene::Update() {
             BeginSimpleAttackTargetSelection();
         } else if (ui::IsPressed(skillsButton)) {
             actionMenuState = ActionMenuState::Skills;
+            skillsScrollOffset = 0;
             combatLog = BuildClassSkillMenuText();
         }
     } else if (actionMenuState == ActionMenuState::Skills) {
+        const Rectangle skillsListBounds{skillsPanelX, skillsListY, skillsPanelWidth, skillsListHeight};
+        const Vector2 mousePos = GetMousePosition();
+        if (CheckCollisionPointRec(mousePos, skillsListBounds)) {
+            const float mouseWheel = GetMouseWheelMove();
+            if (mouseWheel > 0.0f) {
+                skillsScrollOffset = std::max(0, skillsScrollOffset - 1);
+            } else if (mouseWheel < 0.0f) {
+                skillsScrollOffset = std::min(maxSkillScrollOffset, skillsScrollOffset + 1);
+            }
+        }
+
         if (ui::IsPressed(skillsBackButton)) {
             actionMenuState = ActionMenuState::Fight;
             combatLog = "Choose: Simple Attack or Skills.";
             return;
         }
 
-        if (ui::IsPressed(classSkillButtonOne) && !classSkills.empty()) {
-            BeginSkillTargetSelection(0);
-        } else if (ui::IsPressed(classSkillButtonTwo) && classSkills.size() > 1) {
-            BeginSkillTargetSelection(1);
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mousePos, skillsListBounds)) {
+            const float localY = mousePos.y - skillsListY;
+            const int localRow = static_cast<int>(localY / skillsRowHeight);
+            const int skillIndex = skillsScrollOffset + localRow;
+            if (localRow >= 0 && skillIndex >= 0 && skillIndex < static_cast<int>(classSkills.size())) {
+                BeginSkillTargetSelection(static_cast<size_t>(skillIndex));
+            }
         }
     } else if (actionMenuState == ActionMenuState::TargetSelect) {
         if (ui::IsPressed(backButton) || IsKeyPressed(KEY_ESCAPE)) {
@@ -571,8 +606,68 @@ void BattleScene::Draw() {
     backButton.enabled = isPlayerTurn && isTargetSelect;
 
     if (isSkillsMenu && isPlayerTurn) {
-        ui::DrawButton(classSkillButtonOne);
-        ui::DrawButton(classSkillButtonTwo);
+        const float skillsPanelX = pad;
+        const float skillsPanelWidth = std::max(220.0f * sf, std::min(static_cast<float>(sw) * (2.0f / 3.0f) - pad, static_cast<float>(sw) - pad * 2.0f));
+        const float buttonHeight = std::max(34.0f * sf, (playerAreaHeight - pad * 4.0f) / 3.0f);
+        const float row1Y = playerAreaTop + pad;
+        const float skillsHeaderHeight = std::max(24.0f * sf, 20.0f);
+        const float skillsListY = row1Y + skillsHeaderHeight + pad * 0.4f;
+        const float skillsListBottom = playerAreaTop + playerAreaHeight - pad;
+        const float skillsListHeight = std::max(20.0f, skillsListBottom - skillsListY);
+        const float skillsRowHeight = std::max(34.0f * sf, buttonHeight * 0.55f);
+        const int visibleSkillRows = std::max(1, static_cast<int>(std::floor(skillsListHeight / skillsRowHeight)));
+        const int maxSkillScrollOffset = std::max(0, static_cast<int>(classSkills.size()) - visibleSkillRows);
+        skillsScrollOffset = std::clamp(skillsScrollOffset, 0, maxSkillScrollOffset);
+
+        const Rectangle skillsPanelRect{skillsPanelX, row1Y, skillsPanelWidth, skillsListBottom - row1Y};
+        DrawRectangleRec(skillsPanelRect, Color{18, 24, 34, 210});
+        DrawRectangleLinesEx(skillsPanelRect, 2.0f, Color{95, 125, 165, 255});
+        DrawText("Class Skills", static_cast<int>(skillsPanelX + 10.0f * sx), static_cast<int>(row1Y + 4.0f * sy), static_cast<int>(18.0f * sf), RAYWHITE);
+
+        const Vector2 mousePos = GetMousePosition();
+        int hoveredSkillIndex = -1;
+        const int firstSkill = skillsScrollOffset;
+        const int lastSkillExclusive = std::min(static_cast<int>(classSkills.size()), firstSkill + visibleSkillRows);
+        for (int skillIndex = firstSkill; skillIndex < lastSkillExclusive; ++skillIndex) {
+            const int row = skillIndex - firstSkill;
+            const Rectangle rowRect{skillsPanelX + 6.0f * sx, skillsListY + static_cast<float>(row) * skillsRowHeight, skillsPanelWidth - 12.0f * sx, skillsRowHeight - 4.0f * sy};
+            const bool hovered = CheckCollisionPointRec(mousePos, rowRect);
+            if (hovered) {
+                hoveredSkillIndex = skillIndex;
+            }
+
+            DrawRectangleRec(rowRect, hovered ? Color{55, 108, 188, 230} : Color{32, 44, 62, 220});
+            DrawRectangleLinesEx(rowRect, 1.5f, Color{130, 160, 196, 210});
+            const std::string& skillName = classSkills[static_cast<size_t>(skillIndex)].name;
+            DrawText(skillName.c_str(), static_cast<int>(rowRect.x + 10.0f * sx), static_cast<int>(rowRect.y + rowRect.height * 0.25f), static_cast<int>(18.0f * sf), RAYWHITE);
+        }
+
+        if (classSkills.size() > static_cast<size_t>(visibleSkillRows)) {
+            const std::string scrollText = "Scroll " + std::to_string(skillsScrollOffset + 1) + "/" + std::to_string(maxSkillScrollOffset + 1);
+            DrawText(scrollText.c_str(), static_cast<int>(skillsPanelX + skillsPanelWidth - 130.0f * sx), static_cast<int>(row1Y + 6.0f * sy), static_cast<int>(14.0f * sf), Color{205, 215, 235, 255});
+        }
+
+        if (hoveredSkillIndex >= 0 && hoveredSkillIndex < static_cast<int>(classSkills.size())) {
+            const std::string& description = classSkills[static_cast<size_t>(hoveredSkillIndex)].description;
+            const int tooltipFontSize = std::max(13, static_cast<int>(14.0f * sf));
+            const int tooltipTextWidth = MeasureText(description.c_str(), tooltipFontSize);
+            const float tooltipPad = 8.0f * sf;
+            const float tooltipWidth = std::min(static_cast<float>(tooltipTextWidth) + tooltipPad * 2.0f, static_cast<float>(sw) * 0.85f);
+            const float tooltipHeight = static_cast<float>(tooltipFontSize) + tooltipPad * 2.0f;
+            float tooltipX = mousePos.x + 14.0f * sx;
+            float tooltipY = mousePos.y - tooltipHeight - 8.0f * sy;
+            if (tooltipX + tooltipWidth > static_cast<float>(sw) - pad) {
+                tooltipX = static_cast<float>(sw) - tooltipWidth - pad;
+            }
+            if (tooltipY < playerAreaTop + pad) {
+                tooltipY = mousePos.y + 12.0f * sy;
+            }
+
+            DrawRectangle(static_cast<int>(tooltipX), static_cast<int>(tooltipY), static_cast<int>(tooltipWidth), static_cast<int>(tooltipHeight), Color{8, 10, 16, 240});
+            DrawRectangleLines(static_cast<int>(tooltipX), static_cast<int>(tooltipY), static_cast<int>(tooltipWidth), static_cast<int>(tooltipHeight), Color{170, 190, 220, 255});
+            DrawText(description.c_str(), static_cast<int>(tooltipX + tooltipPad), static_cast<int>(tooltipY + tooltipPad), tooltipFontSize, RAYWHITE);
+        }
+
         ui::DrawButton(skillsBackButton);
     } else if (isTargetSelect && isPlayerTurn) {
         ui::Button cancelButton = backButton;
@@ -638,6 +733,28 @@ BattleSaveData BattleScene::GetSaveData() const {
     for (int i = data.inventoryEntryCount; i < kMaxInventorySaveEntries; ++i) {
         data.inventoryItemId[static_cast<size_t>(i)] = 0;
         data.inventoryQuantity[static_cast<size_t>(i)] = 0;
+    }
+
+    data.equippedEntryCount = 0;
+    for (const items::EquipmentSlot slot : player.GetEquipmentLoadout().GetOccupiedSlots()) {
+        const std::optional<items::ItemId> equipped = player.GetEquipmentLoadout().GetEquippedItem(slot);
+        if (!equipped.has_value()) {
+            continue;
+        }
+
+        if (data.equippedEntryCount >= kMaxEquipmentSaveEntries) {
+            break;
+        }
+
+        const size_t index = static_cast<size_t>(data.equippedEntryCount);
+        data.equippedSlotIndex[index] = static_cast<int>(slot);
+        data.equippedItemId[index] = static_cast<int>(*equipped);
+        data.equippedEntryCount++;
+    }
+
+    for (int i = data.equippedEntryCount; i < kMaxEquipmentSaveEntries; ++i) {
+        data.equippedSlotIndex[static_cast<size_t>(i)] = 0;
+        data.equippedItemId[static_cast<size_t>(i)] = 0;
     }
 
     return data;
@@ -883,12 +1000,13 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex, int targetIndex) {
     });
 
     for (const combat::SkillEffectDefinition& effect : skill.effects) {
+        const int resolvedMagnitude = ResolveEffectMagnitude(effect);
         switch (effect.type) {
         case combat::SkillEffectType::DirectDamage: {
             if (validTarget) {
                 EnemyUnit& target = enemies[static_cast<size_t>(targetIndex)];
-                target.enemy->ApplyDamage(effect.magnitude);
-                totalImmediateDamage += effect.magnitude;
+                target.enemy->ApplyDamage(resolvedMagnitude);
+                totalImmediateDamage += resolvedMagnitude;
                 directHits++;
             }
             break;
@@ -899,8 +1017,8 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex, int targetIndex) {
                     continue;
                 }
 
-                unit.enemy->ApplyDamage(effect.magnitude);
-                totalImmediateDamage += effect.magnitude;
+                unit.enemy->ApplyDamage(resolvedMagnitude);
+                totalImmediateDamage += resolvedMagnitude;
                 aoeHits++;
             }
             break;
@@ -912,14 +1030,14 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex, int targetIndex) {
                         continue;
                     }
 
-                    unit.dotDamage = std::max(unit.dotDamage, effect.magnitude);
+                    unit.dotDamage = std::max(unit.dotDamage, resolvedMagnitude);
                     unit.dotTurns = std::max(unit.dotTurns, effect.durationTurns);
                     dotApplied++;
                 }
             } else if (validTarget) {
                 EnemyUnit& target = enemies[static_cast<size_t>(targetIndex)];
                 if (target.enemy->IsAlive()) {
-                    target.dotDamage = std::max(target.dotDamage, effect.magnitude);
+                    target.dotDamage = std::max(target.dotDamage, resolvedMagnitude);
                     target.dotTurns = std::max(target.dotTurns, effect.durationTurns);
                     dotApplied = 1;
                 }
@@ -927,7 +1045,7 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex, int targetIndex) {
             break;
         }
         case combat::SkillEffectType::PlayerDamageReductionBuff: {
-            playerDamageReductionAmount = std::max(playerDamageReductionAmount, effect.magnitude);
+            playerDamageReductionAmount = std::max(playerDamageReductionAmount, resolvedMagnitude);
             playerDamageReductionTurns = std::max(playerDamageReductionTurns, effect.durationTurns);
             break;
         }
@@ -938,14 +1056,14 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex, int targetIndex) {
                         continue;
                     }
 
-                    unit.attackDebuffAmount = std::max(unit.attackDebuffAmount, effect.magnitude);
+                    unit.attackDebuffAmount = std::max(unit.attackDebuffAmount, resolvedMagnitude);
                     unit.attackDebuffTurns = std::max(unit.attackDebuffTurns, effect.durationTurns);
                     debuffApplied++;
                 }
             } else if (validTarget) {
                 EnemyUnit& target = enemies[static_cast<size_t>(targetIndex)];
                 if (target.enemy->IsAlive()) {
-                    target.attackDebuffAmount = std::max(target.attackDebuffAmount, effect.magnitude);
+                    target.attackDebuffAmount = std::max(target.attackDebuffAmount, resolvedMagnitude);
                     target.attackDebuffTurns = std::max(target.attackDebuffTurns, effect.durationTurns);
                     debuffApplied = 1;
                 }
@@ -954,7 +1072,7 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex, int targetIndex) {
         }
         case combat::SkillEffectType::SelfHeal: {
             const int oldHp = player.GetHp();
-            player.Heal(effect.magnitude);
+            player.Heal(resolvedMagnitude);
             healed += player.GetHp() - oldHp;
             break;
         }
@@ -999,15 +1117,72 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex, int targetIndex) {
     actionMenuState = ActionMenuState::Root;
 }
 
+int BattleScene::ResolveEffectMagnitude(const combat::SkillEffectDefinition& effect) const {
+    const int baseMagnitude = std::max(0, effect.magnitude);
+    int percent = std::max(0, effect.scalingPercent);
+    combat::SkillScalingStat scalingStat = effect.scalingStat;
+
+    // Apply default scaling so all damage effects scale even without per-skill metadata.
+    if (scalingStat == combat::SkillScalingStat::None && percent == 0) {
+        switch (effect.type) {
+        case combat::SkillEffectType::DirectDamage:
+            scalingStat = combat::SkillScalingStat::Attack;
+            percent = 60;
+            break;
+        case combat::SkillEffectType::AreaDamage:
+            scalingStat = combat::SkillScalingStat::Attack;
+            percent = 45;
+            break;
+        case combat::SkillEffectType::DamageOverTime:
+            scalingStat = combat::SkillScalingStat::Attack;
+            percent = 30;
+            break;
+        case combat::SkillEffectType::PlayerDamageReductionBuff:
+        case combat::SkillEffectType::EnemyAttackDebuff:
+        case combat::SkillEffectType::SelfHeal:
+            break;
+        }
+    }
+
+    int statValue = 0;
+    switch (scalingStat) {
+    case combat::SkillScalingStat::None:
+        statValue = 0;
+        break;
+    case combat::SkillScalingStat::Attack:
+        statValue = player.GetAttack();
+        break;
+    case combat::SkillScalingStat::MagicAttack:
+        statValue = player.GetMagicAttack();
+        break;
+    case combat::SkillScalingStat::Defense:
+        statValue = player.GetDefense();
+        break;
+    case combat::SkillScalingStat::MaxHp:
+        statValue = player.GetMaxHp();
+        break;
+    }
+
+    const int scaledPart = (statValue * percent + 50) / 100;
+    return baseMagnitude + std::max(0, scaledPart);
+}
+
 std::string BattleScene::BuildClassSkillMenuText() const {
     const auto& skills = GetClassSkills();
     if (skills.empty()) {
         return "No class skills available.";
     }
 
-    std::string text = "Class Skills: " + skills[0].name + " - " + skills[0].description;
-    if (skills.size() > 1) {
-        text += " | " + skills[1].name + " - " + skills[1].description;
+    std::string text = "Class Skills: ";
+    const size_t previewCount = std::min<size_t>(skills.size(), 2);
+    for (size_t i = 0; i < previewCount; ++i) {
+        if (i > 0) {
+            text += " | ";
+        }
+        text += skills[i].name + " - " + skills[i].description;
+    }
+    if (skills.size() > previewCount) {
+        text += " (scroll for more)";
     }
     return text;
 }

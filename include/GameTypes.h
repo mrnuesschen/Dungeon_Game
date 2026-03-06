@@ -3,6 +3,8 @@
 #include <array>
 #include <string>
 
+#include "items/ItemSystem.h"
+
 enum class AppScene {
     MainMenu,
     CharacterCreation,
@@ -40,6 +42,7 @@ enum class EnemyArchetype {
 
 constexpr int kMaxBattleEnemies = 8;
 constexpr int kMaxInventorySaveEntries = 48;
+constexpr int kMaxEquipmentSaveEntries = static_cast<int>(items::EquipmentSlot::Count);
 
 struct CharacterSetupData {
     PlayerClass playerClass = PlayerClass::Knight;
@@ -69,6 +72,9 @@ struct BattleSaveData {
     int inventoryEntryCount = 0;
     std::array<int, kMaxInventorySaveEntries> inventoryItemId{};
     std::array<int, kMaxInventorySaveEntries> inventoryQuantity{};
+    int equippedEntryCount = 0;
+    std::array<int, kMaxEquipmentSaveEntries> equippedSlotIndex{};
+    std::array<int, kMaxEquipmentSaveEntries> equippedItemId{};
     BattlePhase phase = BattlePhase::PlayerTurn;
     std::string playerName = "Hero";
     std::string avatarPath;

@@ -70,6 +70,7 @@ private:
     bool innEquipmentView;
     int guildOfferScrollOffset;
     int shopScrollOffset;
+    int innInventoryScrollOffset;
 
     std::string innPlayerName;
     PlayerClass innPlayerClass;
