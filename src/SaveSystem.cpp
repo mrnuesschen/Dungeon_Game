@@ -80,28 +80,7 @@ int ToInt(EnemyArchetype archetype) {
 }
 
 int ToInt(items::ItemId id) {
-    switch (id) {
-    case items::ItemId::BronzeSword:
-        return 0;
-    case items::ItemId::IronSword:
-        return 1;
-    case items::ItemId::ReinforcedArmor:
-        return 2;
-    case items::ItemId::FocusAmulet:
-        return 3;
-    case items::ItemId::HealthPotion:
-        return 4;
-    case items::ItemId::GreaterHealthPotion:
-        return 5;
-    case items::ItemId::Elixir:
-        return 6;
-    case items::ItemId::AncientRelic:
-        return 7;
-    case items::ItemId::GuildSeal:
-        return 8;
-    }
-
-    return 4;
+    return static_cast<int>(id);
 }
 
 BattlePhase ToPhase(int value) {
@@ -158,28 +137,10 @@ EnemyArchetype ToEnemyArchetype(int value) {
 }
 
 items::ItemId ToItemId(int value) {
-    switch (value) {
-    case 0:
-        return items::ItemId::BronzeSword;
-    case 1:
-        return items::ItemId::IronSword;
-    case 2:
-        return items::ItemId::ReinforcedArmor;
-    case 3:
-        return items::ItemId::FocusAmulet;
-    case 4:
-        return items::ItemId::HealthPotion;
-    case 5:
-        return items::ItemId::GreaterHealthPotion;
-    case 6:
-        return items::ItemId::Elixir;
-    case 7:
-        return items::ItemId::AncientRelic;
-    case 8:
-        return items::ItemId::GuildSeal;
-    default:
+    if (!items::IsValidItemIdValue(value)) {
         return items::ItemId::HealthPotion;
     }
+    return static_cast<items::ItemId>(value);
 }
 
 bool SaveBattleToPath(const BattleSaveData& data, const std::string& path) {

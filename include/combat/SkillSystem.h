@@ -26,6 +26,7 @@ struct SkillDefinition {
     std::string name;
     std::string description;
     std::vector<SkillEffectDefinition> effects;
+    int manaCost = 0;
 };
 
 const std::vector<SkillDefinition>& GetSkillsForClass(PlayerClass playerClass);

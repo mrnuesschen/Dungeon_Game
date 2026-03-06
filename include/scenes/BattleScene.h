@@ -25,6 +25,9 @@ public:
     void ResetEncounterDifficulty();
     int GetPlayerGold() const;
     bool TryPurchaseShopItem(items::ItemId id, std::string& outMessage);
+    bool TryEquipPlayerItem(items::ItemId id, items::EquipmentSlot slot, std::string& outMessage);
+    bool TryUnequipPlayerItem(items::EquipmentSlot slot, std::string& outMessage);
+    const items::EquipmentLoadout& GetPlayerEquipmentLoadout() const;
     void RestAtInn();
 
     void StartNew();
@@ -35,6 +38,7 @@ public:
 
     BattleSaveData GetSaveData() const;
     BattlePhase GetPhase() const;
+    std::vector<EnemyArchetype> ConsumeLastVictoryEnemyArchetypes();
 
     bool ConsumeReturnToMenu();
     bool ConsumeWinEvent();
@@ -80,6 +84,7 @@ private:
     int maxEncounterEnemies;
     int encounterEnemyLevelBonus;
     int encounterFloor;
+    std::vector<EnemyArchetype> lastVictoryEnemyArchetypes;
 
     ui::Button fightButton;
     ui::Button defendButton;

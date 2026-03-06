@@ -6,7 +6,7 @@
 
 SlimeEnemy::SlimeEnemy(EnemyArchetype archetype, std::string name, std::string spritePath, int level)
     : Enemy(archetype, std::move(name), std::move(spritePath), level, 34) {
-    ApplyScaling(70, 14, 8, 2, 14, 2);
+    ApplyScaling(70, 14, 11, 2, 2, 1);
 }
 
 SmallSlimeEnemy::SmallSlimeEnemy(int level)
@@ -14,13 +14,13 @@ SmallSlimeEnemy::SmallSlimeEnemy(int level)
 
 MediumSlimeEnemy::MediumSlimeEnemy(int level)
     : SlimeEnemy(EnemyArchetype::MediumSlime, "Medium Slime", "assets/sprites/enemies/slime_level_20.png", level) {
-    ApplyScaling(100, 17, 11, 2, 18, 2);
+    ApplyScaling(100, 17, 14, 2, 4, 1);
     AddSkill(combat::GetSkillDefinition(combat::SkillId::TitanBlob));
 }
 
 LargeSlimeEnemy::LargeSlimeEnemy(int level)
     : SlimeEnemy(EnemyArchetype::LargeSlime, "Large Slime", "assets/sprites/enemies/slime_level_40.png", level) {
-    ApplyScaling(145, 22, 14, 2, 24, 3);
+    ApplyScaling(145, 22, 19, 3, 6, 1);
     AddSkill(combat::GetSkillDefinition(combat::SkillId::TitanBlob));
     AddSkill(combat::GetSkillDefinition(combat::SkillId::AcidFlood));
 }

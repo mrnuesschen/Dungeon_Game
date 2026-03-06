@@ -11,8 +11,10 @@ Entity::Entity(std::string nameValue, std::string spritePathValue, int levelValu
       level(std::max(1, levelValue)),
       hp(1),
       maxHp(1),
-      attackMin(1),
-      attackMax(1),
+            attack(1),
+            defense(0),
+            magicAttack(0),
+            magicDefense(0),
       availableSkills() {}
 
 const std::string& Entity::GetName() const {
@@ -39,8 +41,24 @@ void Entity::SetHp(int value) {
     hp = std::clamp(value, 0, maxHp);
 }
 
+int Entity::GetAttack() const {
+    return attack;
+}
+
+int Entity::GetDefense() const {
+    return defense;
+}
+
+int Entity::GetMagicAttack() const {
+    return magicAttack;
+}
+
+int Entity::GetMagicDefense() const {
+    return magicDefense;
+}
+
 int Entity::RollAttack() const {
-    return GetRandomValue(attackMin, attackMax);
+    return attack;
 }
 
 void Entity::ApplyDamage(int damage) {
@@ -71,11 +89,13 @@ void Entity::SetLevelInternal(int value) {
     level = std::max(1, value);
 }
 
-void Entity::SetStats(int maxHpValue, int attackMinValue, int attackMaxValue) {
+void Entity::SetStats(int maxHpValue, int attackValue, int defenseValue, int magicAttackValue, int magicDefenseValue) {
     const int oldMaxHp = maxHp;
     maxHp = std::max(1, maxHpValue);
-    attackMin = std::max(1, attackMinValue);
-    attackMax = std::max(attackMin, attackMaxValue);
+    attack = std::max(1, attackValue);
+    defense = std::max(0, defenseValue);
+    magicAttack = std::max(0, magicAttackValue);
+    magicDefense = std::max(0, magicDefenseValue);
 
     if (oldMaxHp <= 0) {
         hp = maxHp;

@@ -30,6 +30,7 @@ add_executable(DungeonGame WIN32
     src/dungeon/DungeonTraversal.cpp
     src/items/ItemSystem.cpp
     src/items/Inventory.cpp
+    src/quests/QuestSystem.cpp
     src/ui/Button.cpp
     src/scenes/MainMenuScene.cpp
     src/scenes/CharacterCreationScene.cpp

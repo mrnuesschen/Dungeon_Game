@@ -7,6 +7,42 @@
 
 namespace {
 
+constexpr float kHeldMoveRepeatSeconds = 0.6f;
+
+bool ResolvePressedMoveDirection(int& dx, int& dy) {
+    dx = 0;
+    dy = 0;
+
+    if (IsKeyPressed(KEY_W) || IsKeyPressed(KEY_UP)) {
+        dy = -1;
+    } else if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_DOWN)) {
+        dy = 1;
+    } else if (IsKeyPressed(KEY_A) || IsKeyPressed(KEY_LEFT)) {
+        dx = -1;
+    } else if (IsKeyPressed(KEY_D) || IsKeyPressed(KEY_RIGHT)) {
+        dx = 1;
+    }
+
+    return dx != 0 || dy != 0;
+}
+
+bool ResolveHeldMoveDirection(int& dx, int& dy) {
+    dx = 0;
+    dy = 0;
+
+    if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP)) {
+        dy = -1;
+    } else if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) {
+        dy = 1;
+    } else if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) {
+        dx = -1;
+    } else if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) {
+        dx = 1;
+    }
+
+    return dx != 0 || dy != 0;
+}
+
 struct FloorEncounterDifficulty {
     int minEnemies;
     int maxEnemies;
@@ -34,12 +70,21 @@ DungeonScene::DungeonScene()
       map(),
       traversal(nullptr),
       activeEncounters(),
-      triggeredEncounterTile(-1),
+    questItemByTile(),
+    requestedQuestSpawns(),
+            triggeredEncounterTile(-1),
+            collectedQuestItem(std::nullopt),
+            heldMoveDx(0),
+            heldMoveDy(0),
+            heldMoveTimer(0.0f),
       leaveDungeonButton{Rectangle{740.0f, 468.0f, 180.0f, 52.0f}, "World Map", true} {}
 
 void DungeonScene::EnterNewDungeon(const std::string& value) {
     playerName = value.empty() ? "Hero" : value;
     currentFloor = 0;
+    heldMoveDx = 0;
+    heldMoveDy = 0;
+    heldMoveTimer = 0.0f;
     GenerateCurrentFloor();
     initialized = true;
 }
@@ -50,6 +95,9 @@ void DungeonScene::AdvanceToNextFloor() {
     }
 
     currentFloor++;
+    heldMoveDx = 0;
+    heldMoveDy = 0;
+    heldMoveTimer = 0.0f;
     GenerateCurrentFloor();
 }
 
@@ -82,13 +130,55 @@ DungeonSceneAction DungeonScene::Update() {
         return DungeonSceneAction::ReturnToWorld;
     }
 
-    const dungeon::MoveResult moveResult = traversal->UpdateFromInputWASD();
+    int moveDx = 0;
+    int moveDy = 0;
+    bool shouldMove = false;
+
+    if (ResolvePressedMoveDirection(moveDx, moveDy)) {
+        // First press always moves immediately.
+        heldMoveDx = moveDx;
+        heldMoveDy = moveDy;
+        heldMoveTimer = 0.0f;
+        shouldMove = true;
+    } else {
+        int heldDx = 0;
+        int heldDy = 0;
+        if (ResolveHeldMoveDirection(heldDx, heldDy)) {
+            if (heldDx != heldMoveDx || heldDy != heldMoveDy) {
+                heldMoveDx = heldDx;
+                heldMoveDy = heldDy;
+                heldMoveTimer = 0.0f;
+            } else {
+                heldMoveTimer += GetFrameTime();
+                if (heldMoveTimer >= kHeldMoveRepeatSeconds) {
+                    heldMoveTimer -= kHeldMoveRepeatSeconds;
+                    moveDx = heldMoveDx;
+                    moveDy = heldMoveDy;
+                    shouldMove = true;
+                }
+            }
+        } else {
+            heldMoveDx = 0;
+            heldMoveDy = 0;
+            heldMoveTimer = 0.0f;
+        }
+    }
+
+    const dungeon::MoveResult moveResult = shouldMove ? traversal->TryMoveByDelta(moveDx, moveDy) : dungeon::MoveResult::NoInput;
     if (moveResult == dungeon::MoveResult::NoInput || moveResult == dungeon::MoveResult::Blocked) {
         return DungeonSceneAction::None;
     }
 
     const dungeon::CellPos& pos = traversal->GetPlayerPosition();
     const int tileIndex = GetTileIndex(pos.x, pos.y);
+
+    if (tileIndex >= 0 && tileIndex < static_cast<int>(questItemByTile.size()) && questItemByTile[static_cast<size_t>(tileIndex)].has_value()) {
+        const quests::QuestItemSpawn spawn = *questItemByTile[static_cast<size_t>(tileIndex)];
+        questItemByTile[static_cast<size_t>(tileIndex)] = std::nullopt;
+        collectedQuestItem = DungeonQuestItemCollection{spawn.questId, spawn.itemId, currentFloor};
+        return DungeonSceneAction::QuestItemCollected;
+    }
+
     if (tileIndex >= 0 && tileIndex < static_cast<int>(activeEncounters.size()) && activeEncounters[static_cast<size_t>(tileIndex)]) {
         triggeredEncounterTile = tileIndex;
         return DungeonSceneAction::EncounterTriggered;
@@ -151,6 +241,15 @@ void DungeonScene::Draw() const {
             if (IsEncounterTile(x, y)) {
                 DrawCircle(static_cast<int>(px + tileSize * 0.5f), static_cast<int>(py + tileSize * 0.5f), tileSize * 0.2f, Color{210, 80, 80, 255});
             }
+
+            if (IsQuestItemTile(x, y)) {
+                DrawRectangle(
+                    static_cast<int>(px + tileSize * 0.3f),
+                    static_cast<int>(py + tileSize * 0.3f),
+                    static_cast<int>(tileSize * 0.4f),
+                    static_cast<int>(tileSize * 0.4f),
+                    Color{240, 212, 120, 255});
+            }
         }
     }
 
@@ -160,7 +259,7 @@ void DungeonScene::Draw() const {
                Color{78, 210, 255, 255});
 
     ui::DrawButton(leaveDungeonButton);
-    DrawText("W/A/S/D: move one tile | Red dot: encounter | Brown tile: exit", static_cast<int>(24.0f * sx), static_cast<int>(502.0f * sy), static_cast<int>(18.0f * sf), Color{195, 205, 220, 255});
+    DrawText("W/A/S/D or Arrow Keys: move | Hold key: auto-move | Red: encounter | Gold: quest item | Brown: exit", static_cast<int>(24.0f * sx), static_cast<int>(502.0f * sy), static_cast<int>(18.0f * sf), Color{195, 205, 220, 255});
 }
 
 int DungeonScene::GetTriggeredEncounterTile() const {
@@ -174,12 +273,53 @@ void DungeonScene::ClearEncounter(int tileIndex) {
     triggeredEncounterTile = -1;
 }
 
+void DungeonScene::SetQuestItemSpawnsForCurrentFloor(const std::vector<quests::QuestItemSpawn>& spawns) {
+    std::vector<quests::QuestItemSpawn> filtered;
+    filtered.reserve(spawns.size());
+    for (const quests::QuestItemSpawn& spawn : spawns) {
+        if (spawn.floor == currentFloor) {
+            filtered.push_back(spawn);
+        }
+    }
+
+    bool changed = filtered.size() != requestedQuestSpawns.size();
+    if (!changed) {
+        for (size_t i = 0; i < filtered.size(); ++i) {
+            const quests::QuestItemSpawn& a = filtered[i];
+            const quests::QuestItemSpawn& b = requestedQuestSpawns[i];
+            if (a.questId != b.questId || a.itemId != b.itemId || a.floor != b.floor) {
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    if (!changed) {
+        return;
+    }
+
+    requestedQuestSpawns = filtered;
+
+    if (initialized) {
+        PlaceQuestItemsForCurrentFloor();
+    }
+}
+
+std::optional<DungeonQuestItemCollection> DungeonScene::ConsumeCollectedQuestItem() {
+    std::optional<DungeonQuestItemCollection> result = collectedQuestItem;
+    collectedQuestItem = std::nullopt;
+    return result;
+}
+
 void DungeonScene::GenerateCurrentFloor() {
     map = dungeon::DungeonGenerator::GenerateRandomMaze(31, 21);
     traversal = std::make_unique<dungeon::DungeonTraversal>(map);
     activeEncounters.assign(static_cast<size_t>(map.width * map.height), false);
+    questItemByTile.assign(static_cast<size_t>(map.width * map.height), std::nullopt);
     PlaceRandomEncounters(8);
+    PlaceQuestItemsForCurrentFloor();
     triggeredEncounterTile = -1;
+    collectedQuestItem = std::nullopt;
 }
 
 bool DungeonScene::IsEncounterTile(int x, int y) const {
@@ -218,4 +358,59 @@ void DungeonScene::PlaceRandomEncounters(int count) {
     for (int i = 0; i < encounterCount; ++i) {
         activeEncounters[static_cast<size_t>(floorTiles[static_cast<size_t>(i)])] = true;
     }
+}
+
+void DungeonScene::PlaceQuestItemsForCurrentFloor() {
+    if (!initialized && map.width <= 0) {
+        return;
+    }
+
+    if (questItemByTile.size() != static_cast<size_t>(map.width * map.height)) {
+        questItemByTile.assign(static_cast<size_t>(map.width * map.height), std::nullopt);
+    } else {
+        std::fill(questItemByTile.begin(), questItemByTile.end(), std::nullopt);
+    }
+
+    if (requestedQuestSpawns.empty()) {
+        return;
+    }
+
+    std::vector<int> floorTiles;
+    floorTiles.reserve(static_cast<size_t>(map.width * map.height));
+
+    for (int y = 0; y < map.height; ++y) {
+        for (int x = 0; x < map.width; ++x) {
+            const dungeon::TileType tile = map.tiles[static_cast<size_t>(y)][static_cast<size_t>(x)];
+            if (tile == dungeon::TileType::Wall || tile == dungeon::TileType::Start || tile == dungeon::TileType::Exit) {
+                continue;
+            }
+
+            const int tileIndex = GetTileIndex(x, y);
+            if (tileIndex < 0) {
+                continue;
+            }
+            if (tileIndex < static_cast<int>(activeEncounters.size()) && activeEncounters[static_cast<size_t>(tileIndex)]) {
+                continue;
+            }
+
+            floorTiles.push_back(tileIndex);
+        }
+    }
+
+    std::mt19937 rng(std::random_device{}());
+    std::shuffle(floorTiles.begin(), floorTiles.end(), rng);
+
+    const int spawnCount = std::min(static_cast<int>(requestedQuestSpawns.size()), static_cast<int>(floorTiles.size()));
+    for (int i = 0; i < spawnCount; ++i) {
+        const int tileIndex = floorTiles[static_cast<size_t>(i)];
+        questItemByTile[static_cast<size_t>(tileIndex)] = requestedQuestSpawns[static_cast<size_t>(i)];
+    }
+}
+
+bool DungeonScene::IsQuestItemTile(int x, int y) const {
+    const int tileIndex = GetTileIndex(x, y);
+    if (tileIndex < 0 || tileIndex >= static_cast<int>(questItemByTile.size())) {
+        return false;
+    }
+    return questItemByTile[static_cast<size_t>(tileIndex)].has_value();
 }

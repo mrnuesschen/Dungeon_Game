@@ -80,6 +80,8 @@ static int RunGame() {
             }
         } else if (currentScene == AppScene::CityMap) {
             cityMapScene.SetPlayerGold(battleScene.GetPlayerGold());
+            cityMapScene.SetInnSnapshot(battleScene.GetSaveData());
+            cityMapScene.SetInnEquipmentSnapshot(battleScene.GetPlayerEquipmentLoadout());
             const CityMapAction action = cityMapScene.Update();
             if (action == CityMapAction::BuyItem) {
                 const std::optional<items::ItemId> requestedItem = cityMapScene.ConsumeRequestedShopItem();
@@ -87,6 +89,20 @@ static int RunGame() {
                     std::string shopMessage;
                     battleScene.TryPurchaseShopItem(*requestedItem, shopMessage);
                     cityMapScene.SetShopFeedback(shopMessage);
+                }
+            } else if (action == CityMapAction::EquipItemAtInn) {
+                const std::optional<CityMapEquipRequest> requestedEquip = cityMapScene.ConsumeRequestedEquipItem();
+                if (requestedEquip.has_value()) {
+                    std::string equipMessage;
+                    battleScene.TryEquipPlayerItem(requestedEquip->itemId, requestedEquip->slot, equipMessage);
+                    cityMapScene.SetShopFeedback(equipMessage);
+                }
+            } else if (action == CityMapAction::UnequipItemAtInn) {
+                const std::optional<items::EquipmentSlot> requestedSlot = cityMapScene.ConsumeRequestedUnequipSlot();
+                if (requestedSlot.has_value()) {
+                    std::string unequipMessage;
+                    battleScene.TryUnequipPlayerItem(*requestedSlot, unequipMessage);
+                    cityMapScene.SetShopFeedback(unequipMessage);
                 }
             } else if (action == CityMapAction::SaveAtInn) {
                 battleScene.RestAtInn();
@@ -100,6 +116,7 @@ static int RunGame() {
                 currentScene = AppScene::WorldMap;
             }
         } else if (currentScene == AppScene::Dungeon) {
+            dungeonScene.SetQuestItemSpawnsForCurrentFloor(cityMapScene.GetPendingQuestItemSpawnsForFloor(dungeonScene.GetCurrentFloor()));
             const DungeonSceneAction action = dungeonScene.Update();
             if (action == DungeonSceneAction::EncounterTriggered) {
                 activeEncounterTile = dungeonScene.GetTriggeredEncounterTile();
@@ -111,6 +128,12 @@ static int RunGame() {
                 battleScene.StartNew();
                 battleFromDungeon = true;
                 currentScene = AppScene::Battle;
+            } else if (action == DungeonSceneAction::QuestItemCollected) {
+                const std::optional<DungeonQuestItemCollection> collected = dungeonScene.ConsumeCollectedQuestItem();
+                if (collected.has_value()) {
+                    cityMapScene.RegisterQuestItemCollected(collected->questId, collected->itemId, collected->floor);
+                    cityMapScene.SetShopFeedback(std::string("Quest item found: ") + items::GetItemDefinition(collected->itemId).name + ".");
+                }
             } else if (action == DungeonSceneAction::ReachedExit) {
                 dungeonScene.AdvanceToNextFloor();
             } else if (action == DungeonSceneAction::ReturnToWorld) {
@@ -121,6 +144,11 @@ static int RunGame() {
 
             const BattlePhase phase = battleScene.GetPhase();
             if (battleScene.ConsumeWinEvent()) {
+                const std::vector<EnemyArchetype> defeatedEnemies = battleScene.ConsumeLastVictoryEnemyArchetypes();
+                if (battleFromDungeon && !defeatedEnemies.empty()) {
+                    cityMapScene.RegisterBattleVictoryForQuests(dungeonScene.GetCurrentFloor(), defeatedEnemies);
+                }
+
                 for (bool& unlocked : gallery.unlocked) {
                     if (!unlocked) {
                         unlocked = true;

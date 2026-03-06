@@ -17,7 +17,7 @@ public:
 protected:
     Enemy(EnemyArchetype archetype, std::string name, std::string spritePath, int level, int expBaseReward);
 
-    void ApplyScaling(int baseHp, int hpPerLevel, int baseAttackMin, int attackMinPerLevel, int baseAttackMax, int attackMaxPerLevel);
+    void ApplyScaling(int baseHp, int hpPerLevel, int baseAttack, int attackPerLevel, int baseDefense, int defensePerLevel);
     void SetBaseSkillsForArchetype(EnemyArchetype archetypeValue);
     void AddSkill(combat::SkillDefinition skill);
 

@@ -18,13 +18,13 @@ int Enemy::GetExpReward() const {
     return expBaseReward + (GetLevel() - 1) * 12;
 }
 
-void Enemy::ApplyScaling(int baseHp, int hpPerLevel, int baseAttackMin, int attackMinPerLevel, int baseAttackMax, int attackMaxPerLevel) {
+void Enemy::ApplyScaling(int baseHp, int hpPerLevel, int baseAttack, int attackPerLevel, int baseDefense, int defensePerLevel) {
     const int levelOffset = GetLevel() - 1;
     const int scaledMaxHp = baseHp + hpPerLevel * levelOffset;
-    const int scaledAttackMin = baseAttackMin + attackMinPerLevel * levelOffset;
-    const int scaledAttackMax = baseAttackMax + attackMaxPerLevel * levelOffset;
+    const int scaledAttack = baseAttack + attackPerLevel * levelOffset;
+    const int scaledDefense = baseDefense + defensePerLevel * levelOffset;
 
-    SetStats(scaledMaxHp, scaledAttackMin, scaledAttackMax);
+    SetStats(scaledMaxHp, scaledAttack, scaledDefense);
     SetHp(GetMaxHp());
 }
 

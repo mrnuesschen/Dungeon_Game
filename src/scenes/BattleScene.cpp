@@ -7,6 +7,36 @@
 #include "entities/EnemyFactory.h"
 #include "raylib.h"
 
+namespace {
+
+int GetEnemyLevelCapForFloor(int floor) {
+    if (floor <= 0) {
+        return 5;
+    }
+    if (floor == 1) {
+        return 8;
+    }
+    if (floor == 2) {
+        return 10;
+    }
+
+    // From floor 3 onward, increase the cap in steps of 5 per floor.
+    return 10 + (floor - 2) * 5;
+}
+
+int ApplyDefenseReduction(int rawDamage, int defense) {
+    if (rawDamage <= 0) {
+        return 0;
+    }
+
+    const int safeDefense = std::max(0, defense);
+    const int denominator = 100 + safeDefense;
+    const int reduced = (rawDamage * 100 + denominator / 2) / denominator;
+    return std::max(1, reduced);
+}
+
+} // namespace
+
 BattleScene::BattleScene()
     : player(),
       enemies(),
@@ -24,6 +54,7 @@ BattleScene::BattleScene()
     maxEncounterEnemies(kMaxBattleEnemies),
     encounterEnemyLevelBonus(0),
     encounterFloor(0),
+    lastVictoryEnemyArchetypes(),
     fightButton{Rectangle{620.0f, 345.0f, 140.0f, 52.0f}, "Fight", true},
     defendButton{Rectangle{770.0f, 345.0f, 140.0f, 52.0f}, "Defend", true},
     healButton{Rectangle{620.0f, 407.0f, 140.0f, 52.0f}, "Heal", true},
@@ -109,6 +140,18 @@ bool BattleScene::TryPurchaseShopItem(items::ItemId id, std::string& outMessage)
     return true;
 }
 
+bool BattleScene::TryEquipPlayerItem(items::ItemId id, items::EquipmentSlot slot, std::string& outMessage) {
+    return player.EquipItem(id, slot, outMessage);
+}
+
+bool BattleScene::TryUnequipPlayerItem(items::EquipmentSlot slot, std::string& outMessage) {
+    return player.UnequipItem(slot, outMessage);
+}
+
+const items::EquipmentLoadout& BattleScene::GetPlayerEquipmentLoadout() const {
+    return player.GetEquipmentLoadout();
+}
+
 void BattleScene::RestAtInn() {
     player.ResetForBattle();
 }
@@ -125,6 +168,7 @@ void BattleScene::StartNew() {
     actionMenuState = ActionMenuState::Root;
     pendingTargetAction = PendingTargetAction::None;
     pendingSkillIndex = 0;
+    lastVictoryEnemyArchetypes.clear();
     ResetBattleEffects();
 }
 
@@ -148,7 +192,11 @@ void BattleScene::StartFromSave(const BattleSaveData& saveData) {
             continue;
         }
 
-        const items::ItemId itemId = static_cast<items::ItemId>(std::clamp(rawId, 0, 8));
+        if (!items::IsValidItemIdValue(rawId)) {
+            continue;
+        }
+
+        const items::ItemId itemId = static_cast<items::ItemId>(rawId);
         inventoryEntries.push_back(items::InventoryEntry{itemId, quantity});
     }
     player.SetInventoryEntries(inventoryEntries);
@@ -166,6 +214,7 @@ void BattleScene::StartFromSave(const BattleSaveData& saveData) {
     actionMenuState = ActionMenuState::Root;
     pendingTargetAction = PendingTargetAction::None;
     pendingSkillIndex = 0;
+    lastVictoryEnemyArchetypes.clear();
     ResetBattleEffects();
 }
 
@@ -255,6 +304,8 @@ void BattleScene::Update() {
                         damage = std::max(1, damage - playerDamageReductionAmount);
                     }
 
+                    damage = ApplyDefenseReduction(damage, player.GetDefense());
+
                     player.ApplyDamage(damage);
                     totalDamage += damage;
                     attackers++;
@@ -289,6 +340,11 @@ void BattleScene::Update() {
                 const int levelUps = player.AddExperience(expAward);
                 phase = BattlePhase::Won;
                 winEventPending = true;
+                lastVictoryEnemyArchetypes.clear();
+                lastVictoryEnemyArchetypes.reserve(enemies.size());
+                for (const EnemyUnit& unit : enemies) {
+                    lastVictoryEnemyArchetypes.push_back(unit.enemy->GetArchetype());
+                }
                 actionMenuState = ActionMenuState::Root;
                 pendingTargetAction = PendingTargetAction::None;
                 combatLog = "Damage over time defeated all enemies. " + BuildVictoryText(expAward, levelUps) + AwardLootForVictory();
@@ -591,6 +647,12 @@ BattlePhase BattleScene::GetPhase() const {
     return phase;
 }
 
+std::vector<EnemyArchetype> BattleScene::ConsumeLastVictoryEnemyArchetypes() {
+    std::vector<EnemyArchetype> result = lastVictoryEnemyArchetypes;
+    lastVictoryEnemyArchetypes.clear();
+    return result;
+}
+
 bool BattleScene::ConsumeReturnToMenu() {
     const bool value = returnToMenuRequested;
     returnToMenuRequested = false;
@@ -774,7 +836,7 @@ void BattleScene::ExecuteSimpleAttack(int targetIndex) {
     }
 
     Enemy& target = *enemies[static_cast<size_t>(targetIndex)].enemy;
-    const int damage = player.RollAttack();
+    const int damage = ApplyDefenseReduction(player.RollAttack(), target.GetDefense());
     target.ApplyDamage(damage);
     combatLog = "You strike " + target.GetName() + " for " + std::to_string(damage) + " damage.";
 
@@ -782,6 +844,11 @@ void BattleScene::ExecuteSimpleAttack(int targetIndex) {
         const int expAward = CalculateBattleExpReward();
         const int levelUps = player.AddExperience(expAward);
         phase = BattlePhase::Won;
+        lastVictoryEnemyArchetypes.clear();
+        lastVictoryEnemyArchetypes.reserve(enemies.size());
+        for (const EnemyUnit& unit : enemies) {
+            lastVictoryEnemyArchetypes.push_back(unit.enemy->GetArchetype());
+        }
         combatLog += " " + BuildVictoryText(expAward, levelUps) + AwardLootForVictory();
         winEventPending = true;
     } else {
@@ -915,6 +982,11 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex, int targetIndex) {
         const int expAward = CalculateBattleExpReward();
         const int levelUps = player.AddExperience(expAward);
         phase = BattlePhase::Won;
+        lastVictoryEnemyArchetypes.clear();
+        lastVictoryEnemyArchetypes.reserve(enemies.size());
+        for (const EnemyUnit& unit : enemies) {
+            lastVictoryEnemyArchetypes.push_back(unit.enemy->GetArchetype());
+        }
         combatLog += " " + BuildVictoryText(expAward, levelUps) + AwardLootForVictory();
         winEventPending = true;
     } else {
@@ -1065,9 +1137,17 @@ void BattleScene::CreateEnemyGroupFromSave(const BattleSaveData& saveData) {
 
 int BattleScene::RollEnemyLevel() const {
     const int playerLevel = player.GetLevel();
-    const int minLevel = std::max(1, playerLevel - 1 + encounterEnemyLevelBonus);
-    const int maxLevel = std::max(minLevel, playerLevel + 1 + encounterEnemyLevelBonus);
-    return GetRandomValue(minLevel, maxLevel);
+    const int floorLevelCap = GetEnemyLevelCapForFloor(encounterFloor);
+
+    const int baseMinLevel = std::max(1, playerLevel - 1 + encounterEnemyLevelBonus);
+    const int baseMaxLevel = std::max(baseMinLevel, playerLevel + 1 + encounterEnemyLevelBonus);
+
+    const int cappedMinLevel = std::min(baseMinLevel, floorLevelCap);
+    const int cappedMaxLevel = std::min(baseMaxLevel, floorLevelCap);
+    const int finalMinLevel = std::max(1, std::min(cappedMinLevel, cappedMaxLevel));
+    const int finalMaxLevel = std::max(finalMinLevel, cappedMaxLevel);
+
+    return GetRandomValue(finalMinLevel, finalMaxLevel);
 }
 
 int BattleScene::CalculateBattleExpReward() const {
