@@ -4,34 +4,23 @@
 #include <vector>
 
 #include "GameTypes.h"
+#include "entities/Entity.h"
 #include "combat/SkillSystem.h"
 
-class Enemy {
+class Enemy : public Entity {
 public:
     virtual ~Enemy() = default;
 
     EnemyArchetype GetArchetype() const;
-    const std::string& GetName() const;
-    const std::string& GetSpritePath() const;
-
-    int GetHp() const;
-    int GetMaxHp() const;
-    void SetHp(int value);
-
-    int RollAttack() const;
-    void ApplyDamage(int damage);
-    bool IsAlive() const;
-    const std::vector<combat::SkillDefinition>& GetSkills() const;
+    int GetExpReward() const;
 
 protected:
-    Enemy(EnemyArchetype archetype, std::string name, std::string spritePath, int maxHp, int attackMin, int attackMax);
+    Enemy(EnemyArchetype archetype, std::string name, std::string spritePath, int level, int expBaseReward);
+
+    void ApplyScaling(int baseHp, int hpPerLevel, int baseAttackMin, int attackMinPerLevel, int baseAttackMax, int attackMaxPerLevel);
+    void SetBaseSkillsForArchetype(EnemyArchetype archetypeValue);
+    void AddSkill(combat::SkillDefinition skill);
 
     EnemyArchetype archetype;
-    std::string name;
-    std::string spritePath;
-    int hp;
-    int maxHp;
-    int attackMin;
-    int attackMax;
-    std::vector<combat::SkillDefinition> availableSkills;
+    int expBaseReward;
 };

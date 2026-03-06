@@ -2,13 +2,23 @@
 
 #include "entities/Enemy.h"
 
-enum class SkeletonType {
-    Lesser,
-    Standard,
-    Warrior
-};
-
 class SkeletonEnemy : public Enemy {
 public:
-    explicit SkeletonEnemy(SkeletonType type);
+protected:
+    explicit SkeletonEnemy(EnemyArchetype archetype, std::string name, std::string spritePath, int level);
+};
+
+class LesserSkeletonEnemy : public SkeletonEnemy {
+public:
+    explicit LesserSkeletonEnemy(int level);
+};
+
+class StandardSkeletonEnemy : public SkeletonEnemy {
+public:
+    explicit StandardSkeletonEnemy(int level);
+};
+
+class SkeletonWarriorEnemy : public SkeletonEnemy {
+public:
+    explicit SkeletonWarriorEnemy(int level);
 };

@@ -2,13 +2,23 @@
 
 #include "entities/Enemy.h"
 
-enum class SlimeType {
-    Small,
-    Medium,
-    Large
-};
-
 class SlimeEnemy : public Enemy {
 public:
-    explicit SlimeEnemy(SlimeType type);
+protected:
+    explicit SlimeEnemy(EnemyArchetype archetype, std::string name, std::string spritePath, int level);
+};
+
+class SmallSlimeEnemy : public SlimeEnemy {
+public:
+    explicit SmallSlimeEnemy(int level);
+};
+
+class MediumSlimeEnemy : public SlimeEnemy {
+public:
+    explicit MediumSlimeEnemy(int level);
+};
+
+class LargeSlimeEnemy : public SlimeEnemy {
+public:
+    explicit LargeSlimeEnemy(int level);
 };

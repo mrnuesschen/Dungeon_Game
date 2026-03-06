@@ -3,54 +3,38 @@
 #include <algorithm>
 #include <utility>
 
-#include "raylib.h"
-
-Enemy::Enemy(EnemyArchetype archetypeValue, std::string nameValue, std::string spritePathValue, int maxHpValue, int attackMinValue, int attackMaxValue)
-    : archetype(archetypeValue),
-      name(std::move(nameValue)),
-            spritePath(std::move(spritePathValue)),
-      hp(maxHpValue),
-      maxHp(maxHpValue),
-      attackMin(attackMinValue),
-            attackMax(attackMaxValue),
-            availableSkills(combat::GetSkillsForEnemy(archetypeValue)) {}
+Enemy::Enemy(EnemyArchetype archetypeValue, std::string nameValue, std::string spritePathValue, int levelValue, int expBaseRewardValue)
+    : Entity(std::move(nameValue), std::move(spritePathValue), levelValue),
+      archetype(archetypeValue),
+      expBaseReward(std::max(1, expBaseRewardValue)) {
+    SetBaseSkillsForArchetype(archetypeValue);
+}
 
 EnemyArchetype Enemy::GetArchetype() const {
     return archetype;
 }
 
-const std::string& Enemy::GetName() const {
-    return name;
+int Enemy::GetExpReward() const {
+    return expBaseReward + (GetLevel() - 1) * 12;
 }
 
-const std::string& Enemy::GetSpritePath() const {
-    return spritePath;
+void Enemy::ApplyScaling(int baseHp, int hpPerLevel, int baseAttackMin, int attackMinPerLevel, int baseAttackMax, int attackMaxPerLevel) {
+    const int levelOffset = GetLevel() - 1;
+    const int scaledMaxHp = baseHp + hpPerLevel * levelOffset;
+    const int scaledAttackMin = baseAttackMin + attackMinPerLevel * levelOffset;
+    const int scaledAttackMax = baseAttackMax + attackMaxPerLevel * levelOffset;
+
+    SetStats(scaledMaxHp, scaledAttackMin, scaledAttackMax);
+    SetHp(GetMaxHp());
 }
 
-int Enemy::GetHp() const {
-    return hp;
+void Enemy::SetBaseSkillsForArchetype(EnemyArchetype archetypeValue) {
+    const auto& baseSkills = combat::GetSkillsForEnemy(archetypeValue);
+    SetSkills(std::vector<combat::SkillDefinition>(baseSkills.begin(), baseSkills.end()));
 }
 
-int Enemy::GetMaxHp() const {
-    return maxHp;
-}
-
-void Enemy::SetHp(int value) {
-    hp = std::clamp(value, 0, maxHp);
-}
-
-int Enemy::RollAttack() const {
-    return GetRandomValue(attackMin, attackMax);
-}
-
-void Enemy::ApplyDamage(int damage) {
-    hp = std::max(0, hp - std::max(0, damage));
-}
-
-bool Enemy::IsAlive() const {
-    return hp > 0;
-}
-
-const std::vector<combat::SkillDefinition>& Enemy::GetSkills() const {
-    return availableSkills;
+void Enemy::AddSkill(combat::SkillDefinition skill) {
+    auto skills = GetSkills();
+    skills.push_back(std::move(skill));
+    SetSkills(std::move(skills));
 }

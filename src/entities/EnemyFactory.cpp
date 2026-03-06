@@ -4,23 +4,25 @@
 #include "entities/Slime.h"
 #include "raylib.h"
 
-std::unique_ptr<Enemy> CreateEnemy(EnemyArchetype archetype) {
+std::unique_ptr<Enemy> CreateEnemy(EnemyArchetype archetype, int level) {
+    const int clampedLevel = level < 1 ? 1 : level;
+
     switch (archetype) {
     case EnemyArchetype::SmallSlime:
-        return std::make_unique<SlimeEnemy>(SlimeType::Small);
+        return std::make_unique<SmallSlimeEnemy>(clampedLevel);
     case EnemyArchetype::MediumSlime:
-        return std::make_unique<SlimeEnemy>(SlimeType::Medium);
+        return std::make_unique<MediumSlimeEnemy>(clampedLevel);
     case EnemyArchetype::LargeSlime:
-        return std::make_unique<SlimeEnemy>(SlimeType::Large);
+        return std::make_unique<LargeSlimeEnemy>(clampedLevel);
     case EnemyArchetype::LesserSkeleton:
-        return std::make_unique<SkeletonEnemy>(SkeletonType::Lesser);
+        return std::make_unique<LesserSkeletonEnemy>(clampedLevel);
     case EnemyArchetype::Skeleton:
-        return std::make_unique<SkeletonEnemy>(SkeletonType::Standard);
+        return std::make_unique<StandardSkeletonEnemy>(clampedLevel);
     case EnemyArchetype::SkeletonWarrior:
-        return std::make_unique<SkeletonEnemy>(SkeletonType::Warrior);
+        return std::make_unique<SkeletonWarriorEnemy>(clampedLevel);
     }
 
-    return std::make_unique<SlimeEnemy>(SlimeType::Small);
+    return std::make_unique<SmallSlimeEnemy>(clampedLevel);
 }
 
 EnemyArchetype RollRandomEnemyArchetype() {

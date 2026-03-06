@@ -17,6 +17,7 @@ FetchContent_MakeAvailable(raylib)
 add_executable(DungeonGame WIN32
     src/main.cpp
     src/SaveSystem.cpp
+    src/entities/Entity.cpp
     src/entities/Player.cpp
     src/entities/Enemy.cpp
     src/entities/Slime.cpp
@@ -25,9 +26,16 @@ add_executable(DungeonGame WIN32
     src/combat/SkillSystem.cpp
     src/combat/SkillDefinitions.cpp
     src/combat/SkillAssignments.cpp
+    src/dungeon/DungeonGenerator.cpp
+    src/dungeon/DungeonTraversal.cpp
+    src/items/ItemSystem.cpp
+    src/items/Inventory.cpp
     src/ui/Button.cpp
     src/scenes/MainMenuScene.cpp
     src/scenes/CharacterCreationScene.cpp
+    src/scenes/WorldMapScene.cpp
+    src/scenes/CityMapScene.cpp
+    src/scenes/DungeonScene.cpp
     src/scenes/BattleScene.cpp
     src/scenes/GalleryScene.cpp
 )

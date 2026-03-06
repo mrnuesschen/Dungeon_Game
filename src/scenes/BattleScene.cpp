@@ -16,8 +16,14 @@ BattleScene::BattleScene()
       returnToMenuRequested(false),
       winEventPending(false),
     actionMenuState(ActionMenuState::Root),
+        pendingTargetAction(PendingTargetAction::None),
+        pendingSkillIndex(0),
     playerDamageReductionAmount(0),
     playerDamageReductionTurns(0),
+    minEncounterEnemies(1),
+    maxEncounterEnemies(kMaxBattleEnemies),
+    encounterEnemyLevelBonus(0),
+    encounterFloor(0),
     fightButton{Rectangle{620.0f, 345.0f, 140.0f, 52.0f}, "Fight", true},
     defendButton{Rectangle{770.0f, 345.0f, 140.0f, 52.0f}, "Defend", true},
     healButton{Rectangle{620.0f, 407.0f, 140.0f, 52.0f}, "Heal", true},
@@ -49,13 +55,62 @@ BattleScene::~BattleScene() {
 
 void BattleScene::ConfigurePlayer(const CharacterSetupData& setupData) {
     player.SetClass(setupData.playerClass);
+    player.SetProgress(1, 0);
+    player.SetGold(0);
     player.SetCharacterName(setupData.playerName);
     player.SetAvatarPath(setupData.avatarPath);
     ReloadPlayerAvatar();
 }
 
+void BattleScene::ConfigureEncounterDifficulty(int minEnemies, int maxEnemies, int enemyLevelBonus) {
+    minEncounterEnemies = std::clamp(minEnemies, 1, kMaxBattleEnemies);
+    maxEncounterEnemies = std::clamp(maxEnemies, minEncounterEnemies, kMaxBattleEnemies);
+    encounterEnemyLevelBonus = std::max(0, enemyLevelBonus);
+}
+
+void BattleScene::SetEncounterFloor(int floor) {
+    encounterFloor = std::max(0, floor);
+}
+
+void BattleScene::ResetEncounterDifficulty() {
+    minEncounterEnemies = 1;
+    maxEncounterEnemies = kMaxBattleEnemies;
+    encounterEnemyLevelBonus = 0;
+    encounterFloor = 0;
+}
+
 PlayerClass BattleScene::GetPlayerClass() const {
     return player.GetClass();
+}
+
+int BattleScene::GetPlayerGold() const {
+    return player.GetGold();
+}
+
+bool BattleScene::TryPurchaseShopItem(items::ItemId id, std::string& outMessage) {
+    const items::ItemDefinition& definition = items::GetItemDefinition(id);
+    if (definition.buyPrice <= 0) {
+        outMessage = "This item cannot be bought.";
+        return false;
+    }
+
+    if (!player.CanAddItemToInventory(id, 1)) {
+        outMessage = std::string("Cannot carry more ") + definition.name + ".";
+        return false;
+    }
+
+    if (!player.SpendGold(definition.buyPrice)) {
+        outMessage = "Not enough gold.";
+        return false;
+    }
+
+    player.AddItemToInventory(id, 1);
+    outMessage = std::string("Bought ") + definition.name + " for " + std::to_string(definition.buyPrice) + " gold.";
+    return true;
+}
+
+void BattleScene::RestAtInn() {
+    player.ResetForBattle();
 }
 
 void BattleScene::StartNew() {
@@ -68,15 +123,36 @@ void BattleScene::StartNew() {
     returnToMenuRequested = false;
     winEventPending = false;
     actionMenuState = ActionMenuState::Root;
+    pendingTargetAction = PendingTargetAction::None;
+    pendingSkillIndex = 0;
     ResetBattleEffects();
 }
 
 void BattleScene::StartFromSave(const BattleSaveData& saveData) {
+    ResetEncounterDifficulty();
     player.SetClass(saveData.playerClass);
+    player.SetProgress(saveData.playerLevel, saveData.playerExp);
+    player.SetGold(saveData.playerGold);
     player.SetCharacterName(saveData.playerName);
     player.SetAvatarPath(saveData.avatarPath);
     player.SetHp(saveData.playerHp);
     player.SetDefending(saveData.playerDefending);
+
+    std::vector<items::InventoryEntry> inventoryEntries;
+    const int entryCount = std::clamp(saveData.inventoryEntryCount, 0, kMaxInventorySaveEntries);
+    inventoryEntries.reserve(static_cast<size_t>(entryCount));
+    for (int i = 0; i < entryCount; ++i) {
+        const int rawId = saveData.inventoryItemId[static_cast<size_t>(i)];
+        const int quantity = saveData.inventoryQuantity[static_cast<size_t>(i)];
+        if (quantity <= 0) {
+            continue;
+        }
+
+        const items::ItemId itemId = static_cast<items::ItemId>(std::clamp(rawId, 0, 8));
+        inventoryEntries.push_back(items::InventoryEntry{itemId, quantity});
+    }
+    player.SetInventoryEntries(inventoryEntries);
+
     ReloadPlayerAvatar();
 
     CreateEnemyGroupFromSave(saveData);
@@ -88,6 +164,8 @@ void BattleScene::StartFromSave(const BattleSaveData& saveData) {
     returnToMenuRequested = false;
     winEventPending = false;
     actionMenuState = ActionMenuState::Root;
+    pendingTargetAction = PendingTargetAction::None;
+    pendingSkillIndex = 0;
     ResetBattleEffects();
 }
 
@@ -204,15 +282,20 @@ void BattleScene::Update() {
             if (!player.IsAlive()) {
                 phase = BattlePhase::Lost;
                 actionMenuState = ActionMenuState::Root;
+                pendingTargetAction = PendingTargetAction::None;
                 combatLog += " You were defeated.";
             } else if (AreAllEnemiesDefeated()) {
+                const int expAward = CalculateBattleExpReward();
+                const int levelUps = player.AddExperience(expAward);
                 phase = BattlePhase::Won;
                 winEventPending = true;
                 actionMenuState = ActionMenuState::Root;
-                combatLog = "Damage over time defeated all enemies. Victory!";
+                pendingTargetAction = PendingTargetAction::None;
+                combatLog = "Damage over time defeated all enemies. " + BuildVictoryText(expAward, levelUps) + AwardLootForVictory();
             } else {
                 phase = BattlePhase::PlayerTurn;
                 actionMenuState = ActionMenuState::Root;
+                pendingTargetAction = PendingTargetAction::None;
                 combatLog = "Your turn: Fight, Defend, or Heal.";
             }
         }
@@ -244,7 +327,7 @@ void BattleScene::Update() {
             actionMenuState = ActionMenuState::Root;
             combatLog = "Your turn: Fight, Defend, or Heal.";
         } else if (ui::IsPressed(simpleAttackButton)) {
-            ExecuteSimpleAttack();
+            BeginSimpleAttackTargetSelection();
         } else if (ui::IsPressed(skillsButton)) {
             actionMenuState = ActionMenuState::Skills;
             combatLog = BuildClassSkillMenuText();
@@ -257,9 +340,21 @@ void BattleScene::Update() {
         }
 
         if (ui::IsPressed(classSkillButtonOne) && !classSkills.empty()) {
-            ExecuteClassSkill(0);
+            BeginSkillTargetSelection(0);
         } else if (ui::IsPressed(classSkillButtonTwo) && classSkills.size() > 1) {
-            ExecuteClassSkill(1);
+            BeginSkillTargetSelection(1);
+        }
+    } else if (actionMenuState == ActionMenuState::TargetSelect) {
+        if (ui::IsPressed(backButton) || IsKeyPressed(KEY_ESCAPE)) {
+            CancelTargetSelection();
+            return;
+        }
+
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            const int targetIndex = GetEnemyIndexAtMouse(sw, sh, sx, sy, sf);
+            if (targetIndex >= 0) {
+                ResolvePendingTargetAction(targetIndex);
+            }
         }
     }
 }
@@ -292,11 +387,26 @@ void BattleScene::Draw() {
     DrawLine(0, static_cast<int>(playerAreaTop), sw, static_cast<int>(playerAreaTop), Color{90, 100, 130, 255});
 
     DrawText("Battle - Enemies", static_cast<int>(pad), static_cast<int>(14.0f * sy), static_cast<int>(30.0f * sf), RAYWHITE);
-    DrawText("Player", static_cast<int>(pad), static_cast<int>(playerAreaTop + 8.0f * sy), static_cast<int>(26.0f * sf), RAYWHITE);
+    DrawText("Player", static_cast<int>(pad), static_cast<int>(playerAreaTop + 8.0f * sy), static_cast<int>(20.0f * sf), RAYWHITE);
 
-    const int enemyCount = static_cast<int>(enemies.size());
-    const int cols = enemyCount <= 2 ? enemyCount : 2;
-    const int rows = enemyCount <= 2 ? 1 : 2;
+    std::vector<size_t> aliveEnemyIndices;
+    aliveEnemyIndices.reserve(enemies.size());
+    for (size_t i = 0; i < enemies.size(); ++i) {
+        if (enemies[i].enemy->IsAlive()) {
+            aliveEnemyIndices.push_back(i);
+        }
+    }
+
+    const int enemyCount = static_cast<int>(aliveEnemyIndices.size());
+    int cols = 1;
+    if (enemyCount <= 2) {
+        cols = std::max(1, enemyCount);
+    } else if (enemyCount <= 4) {
+        cols = 2;
+    } else {
+        cols = 4;
+    }
+    const int rows = std::max(1, (enemyCount + cols - 1) / cols);
     const float enemyTop = 56.0f * sy;
     const float enemyBottom = enemyAreaHeight - 10.0f * sy;
     const float enemyGapX = 20.0f * sx;
@@ -310,11 +420,11 @@ void BattleScene::Draw() {
         const float x = pad + static_cast<float>(col) * (slotWidth + enemyGapX);
         const float y = enemyTop + static_cast<float>(row) * (slotHeight + enemyGapY);
 
-        EnemyUnit& unit = enemies[static_cast<size_t>(i)];
-        Color textColor = unit.enemy->IsAlive() ? RAYWHITE : GRAY;
-        DrawText(unit.enemy->GetName().c_str(), static_cast<int>(x + 8.0f * sx), static_cast<int>(y + 4.0f * sy), static_cast<int>(22.0f * sf), textColor);
+        EnemyUnit& unit = enemies[aliveEnemyIndices[static_cast<size_t>(i)]];
+        DrawText(unit.enemy->GetName().c_str(), static_cast<int>(x + 8.0f * sx), static_cast<int>(y + 4.0f * sy), static_cast<int>(22.0f * sf), RAYWHITE);
+        DrawText(TextFormat("Lv %d", unit.enemy->GetLevel()), static_cast<int>(x + 8.0f * sx), static_cast<int>(y + 26.0f * sy), static_cast<int>(16.0f * sf), Color{190, 210, 240, 255});
 
-        const float nameHeight = 24.0f * sf;
+        const float nameHeight = 42.0f * sf;
         const float hpH = std::max(7.0f * sf, 6.0f);
         const float spriteAreaTop = y + nameHeight + hpH + 14.0f * sy;
         const float spriteAreaHeight = std::max(10.0f, slotHeight - (nameHeight + hpH + 20.0f * sy));
@@ -336,7 +446,7 @@ void BattleScene::Draw() {
             spriteDrawH = unit.sprite.height * scale;
             spriteDrawX = spriteAreaLeft + (spriteAreaWidth - spriteDrawW) * 0.5f;
             spriteDrawY = spriteAreaTop + (spriteAreaHeight - spriteDrawH) * 0.5f;
-            DrawTextureEx(unit.sprite, Vector2{spriteDrawX, spriteDrawY}, 0.0f, scale, unit.enemy->IsAlive() ? WHITE : Color{140, 140, 140, 255});
+            DrawTextureEx(unit.sprite, Vector2{spriteDrawX, spriteDrawY}, 0.0f, scale, WHITE);
         } else {
             DrawText("Sprite", static_cast<int>(spriteAreaLeft + 10.0f * sx), static_cast<int>(spriteAreaTop + spriteAreaHeight * 0.5f), static_cast<int>(18.0f * sf), LIGHTGRAY);
         }
@@ -345,40 +455,49 @@ void BattleScene::Draw() {
         const float hpX = spriteDrawX + (spriteDrawW - hpW) * 0.5f;
         const float hpY = std::max(y + nameHeight + 4.0f * sy, spriteDrawY - hpH - 4.0f * sy);
         DrawHpBar(hpX, hpY, hpW, hpH, unit.enemy->GetHp(), unit.enemy->GetMaxHp());
+
     }
 
+    const float avatarSize = std::min(190.0f * sf, playerAreaHeight - 26.0f * sy);
+    const float avatarX = 20.0f * sx;
+    const float avatarY = playerAreaTop + 22.0f * sy;
+
     if (playerAvatarLoaded) {
-        const float avatarSize = std::min(170.0f * sf, playerAreaHeight - 34.0f * sy);
-        const float avatarX = 20.0f * sx;
-        const float avatarY = playerAreaTop + 36.0f * sy;
         const float scaleX = avatarSize / static_cast<float>(playerAvatarTexture.width);
         const float scaleY = avatarSize / static_cast<float>(playerAvatarTexture.height);
         const float scale = std::min(scaleX, scaleY);
         DrawTextureEx(playerAvatarTexture, Vector2{avatarX, avatarY}, 0.0f, scale, WHITE);
     } else {
-        const float avatarSize = std::min(170.0f * sf, playerAreaHeight - 34.0f * sy);
-        const float avatarX = 20.0f * sx;
-        const float avatarY = playerAreaTop + 36.0f * sy;
         DrawRectangle(static_cast<int>(avatarX), static_cast<int>(avatarY), static_cast<int>(avatarSize), static_cast<int>(avatarSize), Color{60, 60, 75, 160});
         DrawText("Avatar", static_cast<int>(avatarX + 40.0f * sx), static_cast<int>(avatarY + avatarSize * 0.5f), static_cast<int>(22.0f * sf), LIGHTGRAY);
     }
 
-    const float avatarSize = std::min(170.0f * sf, playerAreaHeight - 34.0f * sy);
-    const float infoX = 20.0f * sx + avatarSize + 14.0f * sx;
-    const float infoY = playerAreaTop + 36.0f * sy;
-    DrawText(player.GetCharacterName().c_str(), static_cast<int>(infoX), static_cast<int>(infoY), static_cast<int>(28.0f * sf), RAYWHITE);
-    DrawText(TextFormat("Class: %s", Player::ClassToString(player.GetClass())), static_cast<int>(infoX), static_cast<int>(infoY + 34.0f * sy), static_cast<int>(20.0f * sf), LIGHTGRAY);
-    DrawHpBar(infoX, infoY + 64.0f * sy, 300.0f * sx, 18.0f * sy, player.GetHp(), player.GetMaxHp());
-    DrawText(TextFormat("HP: %d / %d", player.GetHp(), player.GetMaxHp()), static_cast<int>(infoX), static_cast<int>(infoY + 86.0f * sy), static_cast<int>(18.0f * sf), RAYWHITE);
+    const float infoX = avatarX + avatarSize + 12.0f * sx;
+    const float infoY = playerAreaTop + 28.0f * sy;
+    DrawText(TextFormat("Class: %s", Player::ClassToString(player.GetClass())), static_cast<int>(infoX), static_cast<int>(infoY), static_cast<int>(15.0f * sf), LIGHTGRAY);
+    DrawText(TextFormat("Lv %d", player.GetLevel()), static_cast<int>(infoX), static_cast<int>(infoY + 18.0f * sy), static_cast<int>(14.0f * sf), Color{180, 210, 255, 255});
+    DrawHpBar(infoX, infoY + 38.0f * sy, 170.0f * sx, 11.0f * sy, player.GetHp(), player.GetMaxHp());
+
+    const float bottomInfoY = playerAreaTop + playerAreaHeight - 34.0f * sy;
+    const std::string bottomInfo = player.GetCharacterName() +
+        "  |  HP " + std::to_string(player.GetHp()) + "/" + std::to_string(player.GetMaxHp()) +
+        "  |  EXP " + std::to_string(player.GetExp()) + "/" + std::to_string(player.GetExpToNextLevel()) +
+        "  |  Gold " + std::to_string(player.GetGold()) +
+        "  |  INV " + std::to_string(player.GetInventory().GetTotalItemCount()) +
+        " (E " + std::to_string(player.GetInventory().GetCountByCategory(items::ItemCategory::Equipment)) +
+        ", C " + std::to_string(player.GetInventory().GetCountByCategory(items::ItemCategory::Consumable)) +
+        ", Q " + std::to_string(player.GetInventory().GetCountByCategory(items::ItemCategory::Quest)) + ")";
+    DrawText(bottomInfo.c_str(), static_cast<int>(20.0f * sx), static_cast<int>(bottomInfoY), static_cast<int>(18.0f * sf), RAYWHITE);
 
     const float logX = 20.0f * sx;
-    const float logY = playerAreaTop + playerAreaHeight - 36.0f * sy;
-    DrawText(combatLog.c_str(), static_cast<int>(logX), static_cast<int>(logY), static_cast<int>(18.0f * sf), RAYWHITE);
+    const float logY = playerAreaTop + playerAreaHeight - 58.0f * sy;
+    DrawText(combatLog.c_str(), static_cast<int>(logX), static_cast<int>(logY), static_cast<int>(16.0f * sf), RAYWHITE);
 
     const bool isPlayerTurn = phase == BattlePhase::PlayerTurn;
     const bool isRootMenu = actionMenuState == ActionMenuState::Root;
     const bool isFightMenu = actionMenuState == ActionMenuState::Fight;
     const bool isSkillsMenu = actionMenuState == ActionMenuState::Skills;
+    const bool isTargetSelect = actionMenuState == ActionMenuState::TargetSelect;
     const auto& classSkills = GetClassSkills();
 
     fightButton.enabled = isPlayerTurn && isRootMenu;
@@ -393,11 +512,16 @@ void BattleScene::Draw() {
     classSkillButtonOne.enabled = isPlayerTurn && isSkillsMenu && !classSkills.empty();
     classSkillButtonTwo.enabled = isPlayerTurn && isSkillsMenu && classSkills.size() > 1;
     skillsBackButton.enabled = isPlayerTurn && isSkillsMenu;
+    backButton.enabled = isPlayerTurn && isTargetSelect;
 
     if (isSkillsMenu && isPlayerTurn) {
         ui::DrawButton(classSkillButtonOne);
         ui::DrawButton(classSkillButtonTwo);
         ui::DrawButton(skillsBackButton);
+    } else if (isTargetSelect && isPlayerTurn) {
+        ui::Button cancelButton = backButton;
+        cancelButton.text = "Cancel";
+        ui::DrawButton(cancelButton);
     } else if (isFightMenu && isPlayerTurn) {
         ui::DrawButton(simpleAttackButton);
         ui::DrawButton(skillsButton);
@@ -419,12 +543,17 @@ void BattleScene::Draw() {
         DrawText("Defeat", static_cast<int>(430.0f * sx), static_cast<int>(enemyAreaHeight - 28.0f * sy), static_cast<int>(34.0f * sf), Color{220, 90, 90, 255});
     } else if (phase == BattlePhase::EnemyTurn) {
         DrawText("Enemy turn...", static_cast<int>(420.0f * sx), static_cast<int>(enemyAreaHeight - 28.0f * sy), static_cast<int>(24.0f * sf), LIGHTGRAY);
+    } else if (phase == BattlePhase::PlayerTurn && isTargetSelect) {
+        DrawText("Choose target", static_cast<int>(420.0f * sx), static_cast<int>(enemyAreaHeight - 28.0f * sy), static_cast<int>(24.0f * sf), Color{245, 205, 90, 255});
     }
 }
 
 BattleSaveData BattleScene::GetSaveData() const {
     BattleSaveData data;
     data.playerHp = player.GetHp();
+    data.playerLevel = player.GetLevel();
+    data.playerExp = player.GetExp();
+    data.playerGold = player.GetGold();
     data.enemyCount = static_cast<int>(std::min<size_t>(enemies.size(), static_cast<size_t>(kMaxBattleEnemies)));
     data.playerDefending = player.IsDefending();
     data.playerClass = player.GetClass();
@@ -435,11 +564,24 @@ BattleSaveData BattleScene::GetSaveData() const {
     for (int i = 0; i < data.enemyCount; ++i) {
         data.enemyType[static_cast<size_t>(i)] = enemies[static_cast<size_t>(i)].enemy->GetArchetype();
         data.enemyHp[static_cast<size_t>(i)] = enemies[static_cast<size_t>(i)].enemy->GetHp();
+        data.enemyLevel[static_cast<size_t>(i)] = enemies[static_cast<size_t>(i)].enemy->GetLevel();
     }
 
     for (int i = data.enemyCount; i < kMaxBattleEnemies; ++i) {
         data.enemyType[static_cast<size_t>(i)] = EnemyArchetype::SmallSlime;
         data.enemyHp[static_cast<size_t>(i)] = 0;
+        data.enemyLevel[static_cast<size_t>(i)] = 1;
+    }
+
+    const auto& entries = player.GetInventory().GetEntries();
+    data.inventoryEntryCount = std::min(static_cast<int>(entries.size()), kMaxInventorySaveEntries);
+    for (int i = 0; i < data.inventoryEntryCount; ++i) {
+        data.inventoryItemId[static_cast<size_t>(i)] = static_cast<int>(entries[static_cast<size_t>(i)].id);
+        data.inventoryQuantity[static_cast<size_t>(i)] = entries[static_cast<size_t>(i)].quantity;
+    }
+    for (int i = data.inventoryEntryCount; i < kMaxInventorySaveEntries; ++i) {
+        data.inventoryItemId[static_cast<size_t>(i)] = 0;
+        data.inventoryQuantity[static_cast<size_t>(i)] = 0;
     }
 
     return data;
@@ -496,12 +638,138 @@ void BattleScene::ApplyEnemyDotEffects() {
     }
 }
 
-void BattleScene::ExecuteSimpleAttack() {
+bool BattleScene::SkillRequiresEnemyTarget(const combat::SkillDefinition& skill) const {
+    for (const combat::SkillEffectDefinition& effect : skill.effects) {
+        switch (effect.type) {
+        case combat::SkillEffectType::DirectDamage:
+        case combat::SkillEffectType::AreaDamage:
+        case combat::SkillEffectType::DamageOverTime:
+        case combat::SkillEffectType::EnemyAttackDebuff:
+            return true;
+        case combat::SkillEffectType::PlayerDamageReductionBuff:
+        case combat::SkillEffectType::SelfHeal:
+            break;
+        }
+    }
+
+    return false;
+}
+
+void BattleScene::BeginSimpleAttackTargetSelection() {
     const int targetIndex = FindFirstAliveEnemyIndex();
     if (targetIndex < 0) {
         phase = BattlePhase::Won;
         winEventPending = true;
         actionMenuState = ActionMenuState::Root;
+        pendingTargetAction = PendingTargetAction::None;
+        return;
+    }
+
+    pendingTargetAction = PendingTargetAction::SimpleAttack;
+    pendingSkillIndex = 0;
+    actionMenuState = ActionMenuState::TargetSelect;
+    combatLog = "Select a target for Simple Attack.";
+}
+
+void BattleScene::BeginSkillTargetSelection(size_t skillIndex) {
+    const auto& skills = GetClassSkills();
+    if (skillIndex >= skills.size()) {
+        combatLog = "No valid skill selected.";
+        actionMenuState = ActionMenuState::Fight;
+        return;
+    }
+
+    const combat::SkillDefinition& skill = skills[skillIndex];
+    if (!SkillRequiresEnemyTarget(skill)) {
+        ExecuteClassSkill(skillIndex, -1);
+        return;
+    }
+
+    if (FindFirstAliveEnemyIndex() < 0) {
+        phase = BattlePhase::Won;
+        winEventPending = true;
+        actionMenuState = ActionMenuState::Root;
+        pendingTargetAction = PendingTargetAction::None;
+        return;
+    }
+
+    pendingTargetAction = PendingTargetAction::ClassSkill;
+    pendingSkillIndex = skillIndex;
+    actionMenuState = ActionMenuState::TargetSelect;
+    combatLog = "Select a target for " + skill.name + ".";
+}
+
+void BattleScene::CancelTargetSelection() {
+    pendingTargetAction = PendingTargetAction::None;
+    pendingSkillIndex = 0;
+    actionMenuState = ActionMenuState::Fight;
+    combatLog = "Target selection canceled. Choose: Simple Attack or Skills.";
+}
+
+int BattleScene::GetEnemyIndexAtMouse(float sw, float sh, float sx, float sy, float sf) const {
+    std::vector<size_t> aliveEnemyIndices;
+    aliveEnemyIndices.reserve(enemies.size());
+    for (size_t i = 0; i < enemies.size(); ++i) {
+        if (enemies[i].enemy->IsAlive()) {
+            aliveEnemyIndices.push_back(i);
+        }
+    }
+
+    const int enemyCount = static_cast<int>(aliveEnemyIndices.size());
+    if (enemyCount <= 0) {
+        return -1;
+    }
+
+    const float enemyAreaHeight = sh * (2.0f / 3.0f);
+    const float pad = 12.0f * sf;
+    int cols = 1;
+    if (enemyCount <= 2) {
+        cols = std::max(1, enemyCount);
+    } else if (enemyCount <= 4) {
+        cols = 2;
+    } else {
+        cols = 4;
+    }
+    const int rows = std::max(1, (enemyCount + cols - 1) / cols);
+    const float enemyTop = 56.0f * sy;
+    const float enemyBottom = enemyAreaHeight - 10.0f * sy;
+    const float enemyGapX = 20.0f * sx;
+    const float enemyGapY = 14.0f * sy;
+    const float slotWidth = (sw - pad * 2.0f - enemyGapX * static_cast<float>(std::max(cols - 1, 0))) / static_cast<float>(std::max(cols, 1));
+    const float slotHeight = (enemyBottom - enemyTop - enemyGapY * static_cast<float>(std::max(rows - 1, 0))) / static_cast<float>(std::max(rows, 1));
+
+    const Vector2 mousePos = GetMousePosition();
+    for (int i = 0; i < enemyCount; ++i) {
+        const int col = cols == 0 ? 0 : i % cols;
+        const int row = cols == 0 ? 0 : i / cols;
+        const float x = pad + static_cast<float>(col) * (slotWidth + enemyGapX);
+        const float y = enemyTop + static_cast<float>(row) * (slotHeight + enemyGapY);
+        const Rectangle slotBounds{x, y, slotWidth, slotHeight};
+
+        if (CheckCollisionPointRec(mousePos, slotBounds)) {
+            return static_cast<int>(aliveEnemyIndices[static_cast<size_t>(i)]);
+        }
+    }
+
+    return -1;
+}
+
+void BattleScene::ResolvePendingTargetAction(int targetIndex) {
+    switch (pendingTargetAction) {
+    case PendingTargetAction::SimpleAttack:
+        ExecuteSimpleAttack(targetIndex);
+        break;
+    case PendingTargetAction::ClassSkill:
+        ExecuteClassSkill(pendingSkillIndex, targetIndex);
+        break;
+    case PendingTargetAction::None:
+        break;
+    }
+}
+
+void BattleScene::ExecuteSimpleAttack(int targetIndex) {
+    if (targetIndex < 0 || targetIndex >= static_cast<int>(enemies.size()) || !enemies[static_cast<size_t>(targetIndex)].enemy->IsAlive()) {
+        combatLog = "Invalid target.";
         return;
     }
 
@@ -511,18 +779,22 @@ void BattleScene::ExecuteSimpleAttack() {
     combatLog = "You strike " + target.GetName() + " for " + std::to_string(damage) + " damage.";
 
     if (AreAllEnemiesDefeated()) {
+        const int expAward = CalculateBattleExpReward();
+        const int levelUps = player.AddExperience(expAward);
         phase = BattlePhase::Won;
-        combatLog += " Victory!";
+        combatLog += " " + BuildVictoryText(expAward, levelUps) + AwardLootForVictory();
         winEventPending = true;
     } else {
         phase = BattlePhase::EnemyTurn;
         enemyActionDelay = 0.6f;
     }
 
+    pendingTargetAction = PendingTargetAction::None;
+    pendingSkillIndex = 0;
     actionMenuState = ActionMenuState::Root;
 }
 
-void BattleScene::ExecuteClassSkill(size_t skillIndex) {
+void BattleScene::ExecuteClassSkill(size_t skillIndex, int targetIndex) {
     const auto& skills = GetClassSkills();
     if (skillIndex >= skills.size()) {
         combatLog = "No valid skill selected.";
@@ -538,13 +810,16 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex) {
     int debuffApplied = 0;
     int healed = 0;
 
-    const int singleTargetIndex = FindFirstAliveEnemyIndex();
+    const bool validTarget = targetIndex >= 0 && targetIndex < static_cast<int>(enemies.size()) && enemies[static_cast<size_t>(targetIndex)].enemy->IsAlive();
+    const bool hasAreaDamage = std::any_of(skill.effects.begin(), skill.effects.end(), [](const combat::SkillEffectDefinition& effect) {
+        return effect.type == combat::SkillEffectType::AreaDamage;
+    });
 
     for (const combat::SkillEffectDefinition& effect : skill.effects) {
         switch (effect.type) {
         case combat::SkillEffectType::DirectDamage: {
-            if (singleTargetIndex >= 0) {
-                EnemyUnit& target = enemies[static_cast<size_t>(singleTargetIndex)];
+            if (validTarget) {
+                EnemyUnit& target = enemies[static_cast<size_t>(targetIndex)];
                 target.enemy->ApplyDamage(effect.magnitude);
                 totalImmediateDamage += effect.magnitude;
                 directHits++;
@@ -564,7 +839,7 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex) {
             break;
         }
         case combat::SkillEffectType::DamageOverTime: {
-            if (aoeHits > 0) {
+            if (hasAreaDamage) {
                 for (EnemyUnit& unit : enemies) {
                     if (!unit.enemy->IsAlive()) {
                         continue;
@@ -574,8 +849,8 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex) {
                     unit.dotTurns = std::max(unit.dotTurns, effect.durationTurns);
                     dotApplied++;
                 }
-            } else if (singleTargetIndex >= 0) {
-                EnemyUnit& target = enemies[static_cast<size_t>(singleTargetIndex)];
+            } else if (validTarget) {
+                EnemyUnit& target = enemies[static_cast<size_t>(targetIndex)];
                 if (target.enemy->IsAlive()) {
                     target.dotDamage = std::max(target.dotDamage, effect.magnitude);
                     target.dotTurns = std::max(target.dotTurns, effect.durationTurns);
@@ -590,7 +865,7 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex) {
             break;
         }
         case combat::SkillEffectType::EnemyAttackDebuff: {
-            if (aoeHits > 0) {
+            if (hasAreaDamage) {
                 for (EnemyUnit& unit : enemies) {
                     if (!unit.enemy->IsAlive()) {
                         continue;
@@ -600,8 +875,8 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex) {
                     unit.attackDebuffTurns = std::max(unit.attackDebuffTurns, effect.durationTurns);
                     debuffApplied++;
                 }
-            } else if (singleTargetIndex >= 0) {
-                EnemyUnit& target = enemies[static_cast<size_t>(singleTargetIndex)];
+            } else if (validTarget) {
+                EnemyUnit& target = enemies[static_cast<size_t>(targetIndex)];
                 if (target.enemy->IsAlive()) {
                     target.attackDebuffAmount = std::max(target.attackDebuffAmount, effect.magnitude);
                     target.attackDebuffTurns = std::max(target.attackDebuffTurns, effect.durationTurns);
@@ -637,14 +912,18 @@ void BattleScene::ExecuteClassSkill(size_t skillIndex) {
     }
 
     if (AreAllEnemiesDefeated()) {
+        const int expAward = CalculateBattleExpReward();
+        const int levelUps = player.AddExperience(expAward);
         phase = BattlePhase::Won;
-        combatLog += " Victory!";
+        combatLog += " " + BuildVictoryText(expAward, levelUps) + AwardLootForVictory();
         winEventPending = true;
     } else {
         phase = BattlePhase::EnemyTurn;
         enemyActionDelay = 0.6f;
     }
 
+    pendingTargetAction = PendingTargetAction::None;
+    pendingSkillIndex = 0;
     actionMenuState = ActionMenuState::Root;
 }
 
@@ -662,7 +941,7 @@ std::string BattleScene::BuildClassSkillMenuText() const {
 }
 
 const std::vector<combat::SkillDefinition>& BattleScene::GetClassSkills() const {
-    return combat::GetSkillsForClass(player.GetClass());
+    return player.GetSkills();
 }
 
 void BattleScene::DrawHpBar(float x, float y, float w, float h, int hp, int maxHp) const {
@@ -769,9 +1048,9 @@ void BattleScene::ClearEnemies() {
 void BattleScene::CreateEnemyGroupRandom() {
     ClearEnemies();
 
-    const int count = GetRandomValue(1, kMaxBattleEnemies);
+    const int count = GetRandomValue(minEncounterEnemies, maxEncounterEnemies);
     for (int i = 0; i < count; ++i) {
-        AddEnemyToGroup(RollRandomEnemyArchetype(), -1);
+        AddEnemyToGroup(RollRandomEnemyArchetype(), RollEnemyLevel(), -1);
     }
 }
 
@@ -780,13 +1059,81 @@ void BattleScene::CreateEnemyGroupFromSave(const BattleSaveData& saveData) {
 
     const int count = std::clamp(saveData.enemyCount, 1, kMaxBattleEnemies);
     for (int i = 0; i < count; ++i) {
-        AddEnemyToGroup(saveData.enemyType[static_cast<size_t>(i)], saveData.enemyHp[static_cast<size_t>(i)]);
+        AddEnemyToGroup(saveData.enemyType[static_cast<size_t>(i)], saveData.enemyLevel[static_cast<size_t>(i)], saveData.enemyHp[static_cast<size_t>(i)]);
     }
 }
 
-void BattleScene::AddEnemyToGroup(EnemyArchetype type, int hp) {
+int BattleScene::RollEnemyLevel() const {
+    const int playerLevel = player.GetLevel();
+    const int minLevel = std::max(1, playerLevel - 1 + encounterEnemyLevelBonus);
+    const int maxLevel = std::max(minLevel, playerLevel + 1 + encounterEnemyLevelBonus);
+    return GetRandomValue(minLevel, maxLevel);
+}
+
+int BattleScene::CalculateBattleExpReward() const {
+    int totalExp = 0;
+    for (const EnemyUnit& unit : enemies) {
+        totalExp += unit.enemy->GetExpReward();
+    }
+    return std::max(1, totalExp);
+}
+
+int BattleScene::CalculateBattleGoldReward() const {
+    int totalGold = 0;
+    for (const EnemyUnit& unit : enemies) {
+        totalGold += 8 + unit.enemy->GetLevel() * 3;
+    }
+    return std::max(1, totalGold);
+}
+
+std::string BattleScene::AwardLootForVictory() {
+    const int goldReward = CalculateBattleGoldReward();
+    player.AddGold(goldReward);
+
+    const std::vector<items::ItemId> loot = items::RollLootForEncounter(encounterFloor);
+    std::string text = " Gold +" + std::to_string(goldReward) + ".";
+    if (loot.empty()) {
+        return text;
+    }
+
+    std::vector<std::string> acquiredNames;
+    acquiredNames.reserve(loot.size());
+    for (const items::ItemId id : loot) {
+        if (!player.CanAddItemToInventory(id, 1)) {
+            continue;
+        }
+
+        player.AddItemToInventory(id, 1);
+        acquiredNames.push_back(items::GetItemDefinition(id).name);
+    }
+
+    if (acquiredNames.empty()) {
+        return text;
+    }
+
+    text += " Loot: ";
+    for (size_t i = 0; i < acquiredNames.size(); ++i) {
+        text += acquiredNames[i];
+        if (i + 1 < acquiredNames.size()) {
+            text += ", ";
+        }
+    }
+    text += ".";
+
+    return text;
+}
+
+std::string BattleScene::BuildVictoryText(int expAward, int levelUps) const {
+    std::string result = "Victory! You gain " + std::to_string(expAward) + " EXP.";
+    if (levelUps > 0) {
+        result += " Level up +" + std::to_string(levelUps) + " (now level " + std::to_string(player.GetLevel()) + ").";
+    }
+    return result;
+}
+
+void BattleScene::AddEnemyToGroup(EnemyArchetype type, int level, int hp) {
     EnemyUnit unit{};
-    unit.enemy = CreateEnemy(type);
+    unit.enemy = CreateEnemy(type, level);
     unit.dotDamage = 0;
     unit.dotTurns = 0;
     unit.attackDebuffAmount = 0;

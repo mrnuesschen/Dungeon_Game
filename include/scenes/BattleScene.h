@@ -9,6 +9,7 @@
 #include "combat/SkillSystem.h"
 #include "entities/Enemy.h"
 #include "entities/Player.h"
+#include "items/ItemSystem.h"
 #include "raylib.h"
 #include "ui/Button.h"
 
@@ -19,6 +20,12 @@ public:
 
     void ConfigurePlayer(const CharacterSetupData& setupData);
     PlayerClass GetPlayerClass() const;
+    void ConfigureEncounterDifficulty(int minEnemies, int maxEnemies, int enemyLevelBonus);
+    void SetEncounterFloor(int floor);
+    void ResetEncounterDifficulty();
+    int GetPlayerGold() const;
+    bool TryPurchaseShopItem(items::ItemId id, std::string& outMessage);
+    void RestAtInn();
 
     void StartNew();
     void StartFromSave(const BattleSaveData& saveData);
@@ -36,7 +43,14 @@ private:
     enum class ActionMenuState {
         Root,
         Fight,
-        Skills
+        Skills,
+        TargetSelect
+    };
+
+    enum class PendingTargetAction {
+        None,
+        SimpleAttack,
+        ClassSkill
     };
 
     struct EnemyUnit {
@@ -58,8 +72,14 @@ private:
     bool returnToMenuRequested;
     bool winEventPending;
     ActionMenuState actionMenuState;
+    PendingTargetAction pendingTargetAction;
+    size_t pendingSkillIndex;
     int playerDamageReductionAmount;
     int playerDamageReductionTurns;
+    int minEncounterEnemies;
+    int maxEncounterEnemies;
+    int encounterEnemyLevelBonus;
+    int encounterFloor;
 
     ui::Button fightButton;
     ui::Button defendButton;
@@ -85,13 +105,24 @@ private:
     void ClearEnemies();
     void CreateEnemyGroupRandom();
     void CreateEnemyGroupFromSave(const BattleSaveData& saveData);
-    void AddEnemyToGroup(EnemyArchetype type, int hp);
+    int RollEnemyLevel() const;
+    int CalculateBattleExpReward() const;
+    int CalculateBattleGoldReward() const;
+    std::string AwardLootForVictory();
+    std::string BuildVictoryText(int expAward, int levelUps) const;
+    void AddEnemyToGroup(EnemyArchetype type, int level, int hp);
     int FindFirstAliveEnemyIndex() const;
     bool AreAllEnemiesDefeated() const;
     void ResetBattleEffects();
     void ApplyEnemyDotEffects();
-    void ExecuteSimpleAttack();
-    void ExecuteClassSkill(size_t skillIndex);
+    bool SkillRequiresEnemyTarget(const combat::SkillDefinition& skill) const;
+    void BeginSimpleAttackTargetSelection();
+    void BeginSkillTargetSelection(size_t skillIndex);
+    void CancelTargetSelection();
+    int GetEnemyIndexAtMouse(float sw, float sh, float sx, float sy, float sf) const;
+    void ResolvePendingTargetAction(int targetIndex);
+    void ExecuteSimpleAttack(int targetIndex);
+    void ExecuteClassSkill(size_t skillIndex, int targetIndex);
     std::string BuildClassSkillMenuText() const;
     const std::vector<combat::SkillDefinition>& GetClassSkills() const;
 
